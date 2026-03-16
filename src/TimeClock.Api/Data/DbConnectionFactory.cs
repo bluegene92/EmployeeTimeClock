@@ -1,5 +1,5 @@
 using System.Data;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace TimeClock.Api.Data;
 
@@ -9,9 +9,12 @@ public class DbConnectionFactory : IDbConnectionFactory
 
     public DbConnectionFactory(IConfiguration configuration)
     {
-        _connectionString = configuration.GetConnectionString("DefaultConnection")
-            ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
+        var conn = configuration["DATABASE_URL"]
+            ?? configuration.GetConnectionString("DefaultConnection")
+            ?? throw new InvalidOperationException("Connection string 'DATABASE_URL' or 'DefaultConnection' is not configured.");
+        // Railway and some providers use postgres://; Npgsql expects postgresql://
+        _connectionString = conn.Replace("postgres://", "postgresql://", StringComparison.OrdinalIgnoreCase);
     }
 
-    public IDbConnection CreateConnection() => new SqlConnection(_connectionString);
+    public IDbConnection CreateConnection() => new NpgsqlConnection(_connectionString);
 }

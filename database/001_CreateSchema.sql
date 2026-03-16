@@ -1,5 +1,6 @@
 -- TimeClock Database Schema
 -- Run this script against your SQL Server database to create the initial schema.
+-- Uses 4-digit PIN for employee clock-in (no NFC).
 
 IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'TimeClock')
 BEGIN
@@ -20,28 +21,12 @@ BEGIN
         Email NVARCHAR(255) NOT NULL,
         EmployeeNumber NVARCHAR(50) NOT NULL UNIQUE,
         IsActive BIT NOT NULL DEFAULT 1,
+        PinHash NVARCHAR(255) NULL,
         CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
         UpdatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE()
     );
     CREATE INDEX IX_Employees_EmployeeNumber ON Employees(EmployeeNumber);
     CREATE INDEX IX_Employees_IsActive ON Employees(IsActive);
-END
-GO
-
--- NFC Cards
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'NfcCards')
-BEGIN
-    CREATE TABLE NfcCards (
-        Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
-        CardUid NVARCHAR(100) NOT NULL UNIQUE,
-        EmployeeId UNIQUEIDENTIFIER NOT NULL,
-        IsActive BIT NOT NULL DEFAULT 1,
-        RegisteredAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-        LastUsedAt DATETIME2 NULL,
-        CONSTRAINT FK_NfcCards_Employees FOREIGN KEY (EmployeeId) REFERENCES Employees(Id) ON DELETE CASCADE
-    );
-    CREATE UNIQUE INDEX IX_NfcCards_CardUid ON NfcCards(CardUid) WHERE IsActive = 1;
-    CREATE INDEX IX_NfcCards_EmployeeId ON NfcCards(EmployeeId);
 END
 GO
 
@@ -55,7 +40,6 @@ BEGIN
         PunchedAt DATETIME2 NOT NULL,
         Source NVARCHAR(50) NOT NULL DEFAULT 'Desktop',
         DeviceId NVARCHAR(100) NULL,
-        RawCardUid NVARCHAR(100) NULL,
         CONSTRAINT FK_TimePunches_Employees FOREIGN KEY (EmployeeId) REFERENCES Employees(Id) ON DELETE CASCADE
     );
     CREATE INDEX IX_TimePunches_EmployeeId_PunchedAt ON TimePunches(EmployeeId, PunchedAt);

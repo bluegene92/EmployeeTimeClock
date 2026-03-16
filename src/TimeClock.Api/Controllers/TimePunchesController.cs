@@ -9,12 +9,10 @@ namespace TimeClock.Api.Controllers;
 public class TimePunchesController : ControllerBase
 {
     private readonly ITimePunchRepository _punches;
-    private readonly INfcCardRepository _cards;
 
-    public TimePunchesController(ITimePunchRepository punches, INfcCardRepository cards)
+    public TimePunchesController(ITimePunchRepository punches)
     {
         _punches = punches;
-        _cards = cards;
     }
 
     [HttpGet]
@@ -34,7 +32,7 @@ public class TimePunchesController : ControllerBase
     public async Task<ActionResult<SyncPunchesResponse>> Sync([FromBody] SyncPunchesRequest request, CancellationToken ct)
     {
         var count = await _punches.CreateBatchAsync(request.Punches, ct);
-        return Ok(new SyncPunchesResponse { SyncedCount = count });
+        return Ok(new SyncPunchesResponse(count));
     }
 }
 

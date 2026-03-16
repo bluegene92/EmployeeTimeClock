@@ -3,6 +3,11 @@ using TimeClock.Api.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Railway (and similar) inject PORT; bind to 0.0.0.0 for external access
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrEmpty(port))
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
@@ -11,7 +16,6 @@ builder.Services.AddSingleton<IDbConnectionFactory, DbConnectionFactory>();
 
 // Repositories
 builder.Services.AddScoped<IEmployeeRepository, EmployeeRepository>();
-builder.Services.AddScoped<INfcCardRepository, NfcCardRepository>();
 builder.Services.AddScoped<ITimePunchRepository, TimePunchRepository>();
 
 var app = builder.Build();

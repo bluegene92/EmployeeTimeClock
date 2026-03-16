@@ -50,6 +50,10 @@
         "net9.0": {
           "targetAlias": "net9.0",
           "dependencies": {
+            "BCrypt.Net-Next": {
+              "target": "Package",
+              "version": "[4.1.0, )"
+            },
             "Dapper": {
               "target": "Package",
               "version": "[2.1.66, )"
@@ -58,9 +62,9 @@
               "target": "Package",
               "version": "[9.0.11, )"
             },
-            "Microsoft.Data.SqlClient": {
+            "Npgsql": {
               "target": "Package",
-              "version": "[6.1.4, )"
+              "version": "[9.0.3, )"
             }
           },
           "imports": [

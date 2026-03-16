@@ -11,37 +11,29 @@ namespace TimeClock.Api.Controllers;
 public class SyncController : ControllerBase
 {
     private readonly IEmployeeRepository _employees;
-    private readonly INfcCardRepository _cards;
 
-    public SyncController(IEmployeeRepository employees, INfcCardRepository cards)
+    public SyncController(IEmployeeRepository employees)
     {
         _employees = employees;
-        _cards = cards;
     }
 
     /// <summary>
-    /// Returns all active employees with their NFC cards for desktop cache.
+    /// Returns all active employees for desktop cache. Includes HasPinSet so desktop knows who can clock in.
     /// </summary>
     [HttpGet("employees")]
     public async Task<ActionResult<SyncEmployeesResponse>> GetEmployeesForCache(CancellationToken ct)
     {
         var employees = await _employees.GetAllAsync(isActive: true, ct);
-        var result = new List<EmployeeWithCardsDto>();
-        foreach (var emp in employees)
-        {
-            var cards = await _cards.GetByEmployeeIdAsync(emp.Id, ct);
-            result.Add(new EmployeeWithCardsDto(
-                emp.Id,
-                emp.FirstName,
-                emp.LastName,
-                emp.EmployeeNumber,
-                cards.Select(c => new NfcCardDto(c.Id, c.CardUid)).ToList()
-            ));
-        }
+        var result = employees.Select(emp => new EmployeeSyncDto(
+            emp.Id,
+            emp.FirstName,
+            emp.LastName,
+            emp.EmployeeNumber,
+            !string.IsNullOrEmpty(emp.PinHash)
+        )).ToList();
         return Ok(new SyncEmployeesResponse(result));
     }
 }
 
-public record EmployeeWithCardsDto(Guid Id, string FirstName, string LastName, string EmployeeNumber, List<NfcCardDto> Cards);
-public record NfcCardDto(Guid Id, string CardUid);
-public record SyncEmployeesResponse(List<EmployeeWithCardsDto> Employees);
+public record EmployeeSyncDto(Guid Id, string FirstName, string LastName, string EmployeeNumber, bool HasPinSet);
+public record SyncEmployeesResponse(List<EmployeeSyncDto> Employees);

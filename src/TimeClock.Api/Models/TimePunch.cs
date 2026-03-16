@@ -14,5 +14,4 @@ public class TimePunch
     public DateTime PunchedAt { get; set; }
     public string Source { get; set; } = "Desktop";
     public string? DeviceId { get; set; }
-    public string? RawCardUid { get; set; }
 }
