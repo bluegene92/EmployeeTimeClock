@@ -125,6 +125,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseMiddleware<AdminApiKeyMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 

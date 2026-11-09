@@ -91,19 +91,15 @@ The API already applies this script on startup (`CREATE TABLE IF NOT EXISTS`), s
 
 1. Install PostgreSQL locally and create a database named `TimeClock`.
 2. `src/TimeClock.Api/appsettings.Development.json` already has:
-
    ```json
-   "DefaultConnection": "Host=localhost;Database=TimeClock;Username=postgres;Password=postgres"
+     "DefaultConnection": "Host=localhost;Database=TimeClock;Username=postgres;Password=postgres"
    ```
-
 3. Run:
-
    ```powershell
-   dotnet run --project src/TimeClock.Api
+     dotnet run --project src/TimeClock.Api
    ```
 
-   The API listens on `http://localhost:5229` and applies the schema on startup.
-
+     The API listens on `http://localhost:5229` and applies the schema on startup.
 4. Point `.env.local` at `http://localhost:5229` instead of Render.
 
 ## Environment variables

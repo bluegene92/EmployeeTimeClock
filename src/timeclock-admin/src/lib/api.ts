@@ -9,8 +9,6 @@ import type {
 import type { PunchType, TimePunch } from "@/types/timePunch";
 import { toWallClockIso } from "@/lib/biWeeklyUtils";
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5229").replace(/\/$/, "");
-
 function readError(text: string, status: number, statusText: string) {
   const trimmed = text.trim();
   if (!trimmed) return `${status} ${statusText}`;
@@ -26,7 +24,7 @@ function readError(text: string, status: number, statusText: string) {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`/api/backend${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -46,7 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function getApiBaseUrl() {
-  return API_URL;
+  return "/api/backend";
 }
 
 export function listEmployees(isActive?: boolean, locationId?: string) {
