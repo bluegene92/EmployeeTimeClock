@@ -5,19 +5,44 @@ export interface Employee {
   email: string;
   employeeNumber: string;
   isActive: boolean;
-  photoUrl?: string;
-  /** Unique 4-digit ID for clock in/out */
-  clockId?: string;
+  isDeleted?: boolean;
+  pin?: string | null;
+  hasPinSet?: boolean;
+  locationId?: string | null;
+  locationName?: string | null;
   wageRate?: WageRate;
   createdAt: string;
   updatedAt: string;
 }
 
+export type RateType = "Hourly" | "Salary";
+
 export interface WageRate {
   id: string;
   employeeId: string;
-  hourlyRate: number;
-  rateType: "Hourly" | "Salary";
+  hourlyRate: number | null;
+  salaryAmount: number | null;
+  rateType: RateType;
   effectiveFrom: string;
-  effectiveTo?: string;
+  effectiveTo?: string | null;
+}
+
+export interface Location {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
+export interface ResolvedDayRate {
+  employeeId: string;
+  workDate: string;
+  hourlyRate: number | null;
+  source: "Current" | "Override" | "Frozen";
+  isVerified: boolean;
+  rateType: RateType;
+}
+
+export interface PayPeriodSettings {
+  anchorDate: string;
+  updatedAt: string;
 }

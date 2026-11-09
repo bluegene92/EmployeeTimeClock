@@ -1,0 +1,21 @@
+# Build
+**/bin/
+**/obj/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vs/
+.idea/
+*.user
+*.suo
+
+# Secrets
+.env
+.env.local
+*.pem
+
+# Next.js (also ignored under src/timeclock-admin)
+node_modules/
+.next/
+out/

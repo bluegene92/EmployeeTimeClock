@@ -14,31 +14,24 @@ public class EmployeePinsController : ControllerBase
     [HttpPut]
     public async Task<ActionResult> SetPin(Guid employeeId, [FromBody] SetPinRequest request, CancellationToken ct)
     {
-        var employee = await _employees.GetByIdAsync(employeeId, ct);
-        if (employee is null)
-            return NotFound();
-
-        if (string.IsNullOrEmpty(request.Pin) || request.Pin.Length != 4 || !request.Pin.All(char.IsDigit))
-            return BadRequest("PIN must be exactly 4 digits.");
-
-        var success = await _employees.SetPinAsync(employeeId, request.Pin, ct);
-        if (!success)
-            return BadRequest("Failed to set PIN.");
+        var result = await _employees.SetPinAsync(employeeId, request.Pin?.Trim() ?? "", ct);
+        if (!result.Success)
+        {
+            if (result.Error == "Employee not found.")
+                return NotFound(new { message = result.Error });
+            return BadRequest(new { message = result.Error });
+        }
         return NoContent();
     }
 
     [HttpDelete]
     public async Task<ActionResult> ClearPin(Guid employeeId, CancellationToken ct)
     {
-        var employee = await _employees.GetByIdAsync(employeeId, ct);
-        if (employee is null)
-            return NotFound();
-
         var success = await _employees.ClearPinAsync(employeeId, ct);
         if (!success)
-            return BadRequest("Failed to clear PIN.");
+            return NotFound(new { message = "Employee not found." });
         return NoContent();
     }
 }
 
-public record SetPinRequest(string Pin);
+public record SetPinRequest(string? Pin);

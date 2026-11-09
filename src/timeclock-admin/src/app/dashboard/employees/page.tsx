@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Plus,
@@ -9,12 +9,14 @@ import {
   Trash2,
   UserCircle,
 } from "lucide-react";
-import type { Employee } from "@/types/employee";
+import type { Employee, Location, RateType } from "@/types/employee";
 import {
-  getEmployees,
-  addEmployee,
-  deleteEmployee as deleteEmployeeFromStore,
-} from "@/lib/employeeStore";
+  createEmployee,
+  deleteEmployee,
+  listEmployees,
+  listLocations,
+  updateEmployee,
+} from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,14 +48,49 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 export default function EmployeesPage() {
-  const [employees, setEmployeesState] = useState<Employee[]>(getEmployees);
-  const refreshEmployees = () => setEmployeesState(getEmployees());
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBulkEditModal, setShowBulkEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | "bulk" | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refreshEmployees = async () => {
+    const data = await listEmployees();
+    setEmployees(data);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        const [data, locationData] = await Promise.all([
+          listEmployees(),
+          listLocations(),
+        ]);
+        if (!cancelled) {
+          setEmployees(data);
+          setLocations(locationData);
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load employees.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const filteredEmployees = useMemo(() => {
     let result = employees;
@@ -86,28 +123,89 @@ export default function EmployeesPage() {
     else setSelectedIds(new Set(filteredEmployees.map((e) => e.id)));
   };
 
-  const handleDelete = (id: string) => {
-    deleteEmployeeFromStore(id);
-    refreshEmployees();
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    setShowDeleteConfirm(null);
+  const handleDelete = async (id: string) => {
+    try {
+      setBusy(true);
+      await deleteEmployee(id);
+      await refreshEmployees();
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setShowDeleteConfirm(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete employee.");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleBulkDelete = () => {
-    selectedIds.forEach((id) => deleteEmployeeFromStore(id));
-    refreshEmployees();
-    setSelectedIds(new Set());
-    setShowDeleteConfirm(null);
+  const handleBulkDelete = async () => {
+    try {
+      setBusy(true);
+      await Promise.all([...selectedIds].map((id) => deleteEmployee(id)));
+      await refreshEmployees();
+      setSelectedIds(new Set());
+      setShowDeleteConfirm(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete employees.");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleCreate = (emp: Omit<Employee, "id" | "createdAt" | "updatedAt">) => {
-    addEmployee(emp);
-    refreshEmployees();
-    setShowCreateModal(false);
+  const handleCreate = async (emp: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    employeeNumber: string;
+    isActive: boolean;
+    locationId?: string | null;
+    rateType?: RateType;
+    hourlyRate?: number;
+    salaryAmount?: number;
+  }) => {
+    try {
+      setBusy(true);
+      await createEmployee(emp);
+      await refreshEmployees();
+      setShowCreateModal(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create employee.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleBulkStatus = async (isActive: boolean) => {
+    try {
+      setBusy(true);
+      const selected = employees.filter((e) => selectedIds.has(e.id));
+      await Promise.all(
+        selected.map((e) =>
+          updateEmployee(e.id, {
+            firstName: e.firstName,
+            lastName: e.lastName,
+            email: e.email,
+            employeeNumber: e.employeeNumber,
+            isActive,
+            locationId: e.locationId ?? null,
+          })
+        )
+      );
+      await refreshEmployees();
+      setShowBulkEditModal(false);
+      setSelectedIds(new Set());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update employees.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -116,7 +214,7 @@ export default function EmployeesPage() {
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Employees</h1>
           <p className="mt-1 text-muted-foreground">
-            Manage employee information and clock IDs
+            Manage employees, home locations, and clock PINs
           </p>
         </div>
         <Button onClick={() => setShowCreateModal(true)}>
@@ -124,6 +222,12 @@ export default function EmployeesPage() {
           Add Employee
         </Button>
       </div>
+
+      {error && (
+        <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-4">
         <div className="relative flex-1 min-w-[200px]">
@@ -186,8 +290,9 @@ export default function EmployeesPage() {
                 </TableHead>
                 <TableHead>Employee</TableHead>
                 <TableHead>Employee #</TableHead>
+                <TableHead>Location</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>Clock ID</TableHead>
+                <TableHead>PIN</TableHead>
                 <TableHead>Hourly Rate</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-20" />
@@ -207,17 +312,9 @@ export default function EmployeesPage() {
                       href={`/dashboard/employees/${emp.id}`}
                       className="flex items-center gap-3"
                     >
-                      {emp.photoUrl ? (
-                        <img
-                          src={emp.photoUrl}
-                          alt=""
-                          className="h-9 w-9 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                          <UserCircle className="h-5 w-5" />
-                        </div>
-                      )}
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                        <UserCircle className="h-5 w-5" />
+                      </div>
                       <span className="font-medium">
                         {emp.firstName} {emp.lastName}
                       </span>
@@ -226,12 +323,19 @@ export default function EmployeesPage() {
                   <TableCell className="text-muted-foreground">
                     {emp.employeeNumber}
                   </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {emp.locationName ?? "—"}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{emp.email}</TableCell>
-                  <TableCell className="font-mono text-muted-foreground">
-                    {emp.clockId ?? "—"}
+                  <TableCell className="text-muted-foreground">
+                    {emp.hasPinSet ? "Set" : "—"}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    ${emp.wageRate?.hourlyRate?.toFixed(2) ?? "—"}
+                    {emp.wageRate?.rateType === "Salary"
+                      ? "Salary"
+                      : emp.wageRate?.hourlyRate != null
+                        ? `$${emp.wageRate.hourlyRate.toFixed(2)}`
+                        : "—"}
                   </TableCell>
                   <TableCell>
                     <span
@@ -267,7 +371,12 @@ export default function EmployeesPage() {
               ))}
             </TableBody>
           </Table>
-          {filteredEmployees.length === 0 && (
+          {loading && (
+            <div className="px-8 py-12 text-center text-muted-foreground">
+              Loading employees...
+            </div>
+          )}
+          {!loading && filteredEmployees.length === 0 && (
             <div className="px-8 py-12 text-center text-muted-foreground">
               No employees found.
             </div>
@@ -283,16 +392,17 @@ export default function EmployeesPage() {
             </DialogTitle>
             <DialogDescription>
               {showDeleteConfirm === "bulk"
-                ? `This will permanently delete ${selectedIds.size} employee(s).`
-                : "This action cannot be undone."}
+                ? `This hides ${selectedIds.size} employee(s). Their punches and pay records stay in the database.`
+                : "This hides the employee. Their punches and pay records stay in the database."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteConfirm(null)}>
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(null)} disabled={busy}>
               Cancel
             </Button>
             <Button
               variant="destructive"
+              disabled={busy}
               onClick={() =>
                 showDeleteConfirm === "bulk"
                   ? handleBulkDelete()
@@ -307,6 +417,8 @@ export default function EmployeesPage() {
 
       {showCreateModal && (
         <CreateEmployeeModal
+          busy={busy}
+          locations={locations}
           onClose={() => setShowCreateModal(false)}
           onCreate={handleCreate}
         />
@@ -314,9 +426,10 @@ export default function EmployeesPage() {
 
       {showBulkEditModal && (
         <BulkEditModal
+          busy={busy}
           count={selectedIds.size}
           onClose={() => setShowBulkEditModal(false)}
-          onSave={() => setShowBulkEditModal(false)}
+          onSetActive={handleBulkStatus}
         />
       )}
     </div>
@@ -324,38 +437,49 @@ export default function EmployeesPage() {
 }
 
 function CreateEmployeeModal({
+  busy,
+  locations,
   onClose,
   onCreate,
 }: {
+  busy: boolean;
+  locations: Location[];
   onClose: () => void;
-  onCreate: (emp: Omit<Employee, "id" | "createdAt" | "updatedAt">) => void;
+  onCreate: (emp: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    employeeNumber: string;
+    isActive: boolean;
+    locationId?: string | null;
+    rateType?: RateType;
+    hourlyRate?: number;
+    salaryAmount?: number;
+  }) => void;
 }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [employeeNumber, setEmployeeNumber] = useState("");
-  const [hourlyRate, setHourlyRate] = useState("");
+  const [locationId, setLocationId] = useState("");
+  const [rateType, setRateType] = useState<RateType>("Hourly");
+  const [payAmount, setPayAmount] = useState("");
   const [isActive, setIsActive] = useState(true);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const wage = hourlyRate
-      ? {
-          id: "w-new",
-          employeeId: "",
-          hourlyRate: parseFloat(hourlyRate),
-          rateType: "Hourly" as const,
-          effectiveFrom: new Date().toISOString().slice(0, 10),
-        }
-      : undefined;
+    const parsed = payAmount ? parseFloat(payAmount) : undefined;
+    const amount = parsed !== undefined && !Number.isNaN(parsed) ? parsed : undefined;
     onCreate({
       firstName,
       lastName,
       email,
       employeeNumber,
       isActive,
-      clockId: undefined,
-      wageRate: wage,
+      locationId: locationId || null,
+      rateType,
+      hourlyRate: rateType === "Hourly" ? amount : undefined,
+      salaryAmount: rateType === "Salary" ? amount : undefined,
     });
   };
 
@@ -402,15 +526,45 @@ function CreateEmployeeModal({
             />
           </div>
           <div className="space-y-2">
-            <Label>Hourly rate ($)</Label>
-            <Input
-              type="number"
-              step="0.01"
-              min="0"
-              value={hourlyRate}
-              onChange={(e) => setHourlyRate(e.target.value)}
-              placeholder="Optional"
-            />
+            <Label>Home location</Label>
+            <Select value={locationId || "none"} onValueChange={(v) => setLocationId(v === "none" ? "" : v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Unassigned" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Unassigned</SelectItem>
+                {locations.filter((l) => l.isActive).map((location) => (
+                  <SelectItem key={location.id} value={location.id}>
+                    {location.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Pay type</Label>
+              <Select value={rateType} onValueChange={(v) => setRateType(v as RateType)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Hourly">Hourly</SelectItem>
+                  <SelectItem value="Salary">Salary</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>{rateType === "Salary" ? "Salary amount ($)" : "Hourly rate ($)"}</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={payAmount}
+                onChange={(e) => setPayAmount(e.target.value)}
+                placeholder="Optional"
+              />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Checkbox
@@ -421,10 +575,10 @@ function CreateEmployeeModal({
             <Label htmlFor="active">Active</Label>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
-            <Button type="submit">Create</Button>
+            <Button type="submit" disabled={busy}>Create</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -433,13 +587,15 @@ function CreateEmployeeModal({
 }
 
 function BulkEditModal({
+  busy,
   count,
   onClose,
-  onSave,
+  onSetActive,
 }: {
+  busy: boolean;
   count: number;
   onClose: () => void;
-  onSave: () => void;
+  onSetActive: (isActive: boolean) => void;
 }) {
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -447,15 +603,19 @@ function BulkEditModal({
         <DialogHeader>
           <DialogTitle>Bulk Edit ({count} employees)</DialogTitle>
           <DialogDescription>
-            Bulk edit options (e.g. status, wage) will be available when connected
-            to API.
+            Set status for the selected employees.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Close
           </Button>
-          <Button onClick={onSave}>Save</Button>
+          <Button variant="secondary" onClick={() => onSetActive(false)} disabled={busy}>
+            Mark inactive
+          </Button>
+          <Button onClick={() => onSetActive(true)} disabled={busy}>
+            Mark active
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

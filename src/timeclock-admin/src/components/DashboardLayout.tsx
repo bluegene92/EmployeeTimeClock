@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Clock,
   Users,
+  MapPin,
   BarChart3,
   Settings,
   LogOut,
@@ -18,6 +19,7 @@ import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/dashboard/employees", label: "Employees", icon: Users },
+  { href: "/dashboard/locations", label: "Locations", icon: MapPin },
   { href: "/dashboard/timeclock", label: "Time Clock", icon: Clock },
   { href: "/dashboard/reports", label: "Reports", icon: BarChart3 },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },

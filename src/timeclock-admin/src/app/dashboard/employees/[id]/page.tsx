@@ -1,91 +1,202 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { ChevronLeft, ChevronRight, Clock, DollarSign } from "lucide-react";
+import type { Employee, Location, RateType, WageRate } from "@/types/employee";
 import {
-  ChevronLeft,
-  ChevronRight,
-  UserCircle,
-  Camera,
-  Clock,
-  DollarSign,
-} from "lucide-react";
-import { getEmployeeById, updateEmployee } from "@/lib/employeeStore";
-import type { Employee } from "@/types/employee";
+  clearEmployeePin,
+  getEmployee,
+  listLocations,
+  listWageHistory,
+  setEmployeePin,
+  setEmployeeWage,
+  updateEmployee,
+} from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 export default function EmployeeDetailPage() {
   const params = useParams();
   const id = params.id as string;
   const [employee, setEmployee] = useState<Employee | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [hourlyRate, setHourlyRate] = useState("");
-  const [clockId, setClockId] = useState("");
-  const [isEditingClockId, setIsEditingClockId] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [history, setHistory] = useState<WageRate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [employeeNumber, setEmployeeNumber] = useState("");
+  const [locationId, setLocationId] = useState("");
+  const [isActive, setIsActive] = useState(true);
+
+  const [editingPay, setEditingPay] = useState(false);
+  const [rateType, setRateType] = useState<RateType>("Hourly");
+  const [payAmount, setPayAmount] = useState("");
+
+  const [editingPin, setEditingPin] = useState(false);
+  const [pin, setPin] = useState("");
+
+  const load = async () => {
+    const [emp, locationData, wageHistory] = await Promise.all([
+      getEmployee(id),
+      listLocations(),
+      listWageHistory(id),
+    ]);
+    setEmployee(emp);
+    setLocations(locationData);
+    setHistory(wageHistory);
+    setFirstName(emp.firstName);
+    setLastName(emp.lastName);
+    setEmail(emp.email);
+    setEmployeeNumber(emp.employeeNumber);
+    setLocationId(emp.locationId ?? "");
+    setIsActive(emp.isActive);
+    const type = emp.wageRate?.rateType ?? "Hourly";
+    setRateType(type);
+    setPayAmount(
+      type === "Salary"
+        ? emp.wageRate?.salaryAmount != null
+          ? String(emp.wageRate.salaryAmount)
+          : ""
+        : emp.wageRate?.hourlyRate != null
+          ? String(emp.wageRate.hourlyRate)
+          : ""
+    );
+  };
 
   useEffect(() => {
-    const emp = getEmployeeById(id);
-    setEmployee(emp ?? null);
-    if (emp?.wageRate) setHourlyRate(String(emp.wageRate.hourlyRate));
-    if (emp?.clockId) setClockId(emp.clockId);
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        await load();
+        if (!cancelled) setError(null);
+      } catch {
+        if (!cancelled) {
+          setEmployee(null);
+          setError("Employee not found.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !employee) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      updateEmployee(employee.id, { photoUrl: dataUrl });
-      setEmployee({ ...employee, photoUrl: dataUrl });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleSaveWage = () => {
+  const handleSaveProfile = async () => {
     if (!employee) return;
-    const rate = parseFloat(hourlyRate);
-    if (!isNaN(rate) && rate >= 0) {
-      const existing = employee.wageRate;
-      const wageRate = {
-        id: existing?.id ?? "w",
-        employeeId: employee.id,
-        hourlyRate: rate,
-        rateType: "Hourly" as const,
-        effectiveFrom:
-          existing?.effectiveFrom ?? new Date().toISOString().slice(0, 10),
-        effectiveTo: existing?.effectiveTo,
-      };
-      updateEmployee(employee.id, { wageRate });
-      setEmployee({ ...employee, wageRate });
+    try {
+      setBusy(true);
+      await updateEmployee(employee.id, {
+        firstName,
+        lastName,
+        email,
+        employeeNumber,
+        isActive,
+        locationId: locationId || null,
+      });
+      await load();
+      setEditingProfile(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save employee.");
+    } finally {
+      setBusy(false);
     }
-    setIsEditing(false);
   };
 
-  const isValidClockId = (val: string) => /^\d{4}$/.test(val);
-
-  const handleSaveClockId = () => {
+  const handleSavePay = async () => {
     if (!employee) return;
-    const trimmed = clockId.trim();
-    if (trimmed === "") {
-      updateEmployee(employee.id, { clockId: undefined });
-      setEmployee({ ...employee, clockId: undefined });
-    } else if (isValidClockId(trimmed)) {
-      updateEmployee(employee.id, { clockId: trimmed });
-      setEmployee({ ...employee, clockId: trimmed });
+    const amount = parseFloat(payAmount);
+    if (Number.isNaN(amount) || amount < 0) {
+      setError(rateType === "Salary" ? "Enter a salary amount." : "Enter an hourly rate.");
+      return;
     }
-    setIsEditingClockId(false);
+    try {
+      setBusy(true);
+      await setEmployeeWage(employee.id, {
+        rateType,
+        hourlyRate: rateType === "Hourly" ? amount : undefined,
+        salaryAmount: rateType === "Salary" ? amount : undefined,
+      });
+      await load();
+      setEditingPay(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save pay.");
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const handleSavePin = async () => {
+    if (!employee) return;
+    if (!/^[1-9]\d{3}$/.test(pin)) {
+      setError("PIN must be 4 digits and cannot start with 0.");
+      return;
+    }
+    try {
+      setBusy(true);
+      await setEmployeePin(employee.id, pin);
+      await load();
+      setPin("");
+      setEditingPin(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update PIN.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearPin = async () => {
+    if (!employee) return;
+    try {
+      setBusy(true);
+      await clearEmployeePin(employee.id);
+      await load();
+      setPin("");
+      setEditingPin(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear PIN.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center p-8">
+        <p className="text-muted-foreground">Loading employee...</p>
+      </div>
+    );
+  }
 
   if (!employee) {
     return (
       <div className="flex min-h-[400px] items-center justify-center p-8">
-        <p className="text-muted-foreground">Employee not found.</p>
+        <p className="text-muted-foreground">{error ?? "Employee not found."}</p>
         <Button variant="link" asChild>
           <Link href="/dashboard/employees" className="ml-4">
             Back to Employees
@@ -96,23 +207,25 @@ export default function EmployeeDetailPage() {
   }
 
   const displayName = `${employee.firstName} ${employee.lastName}`;
+  const payLabel =
+    employee.wageRate?.rateType === "Salary"
+      ? employee.wageRate.salaryAmount != null
+        ? `Salary $${employee.wageRate.salaryAmount.toFixed(2)}`
+        : "Salary"
+      : employee.wageRate?.hourlyRate != null
+        ? `$${employee.wageRate.hourlyRate.toFixed(2)}/hr`
+        : "No rate";
 
   return (
     <div className="p-8">
       <div className="mb-6 flex items-center gap-2">
         <Button variant="ghost" size="icon" asChild>
-          <Link
-            href="/dashboard/employees"
-            title="Back to Employees"
-          >
+          <Link href="/dashboard/employees" title="Back to Employees">
             <ChevronLeft className="h-5 w-5" />
           </Link>
         </Button>
         <nav className="flex items-center gap-2 text-sm">
-          <Link
-            href="/dashboard/employees"
-            className="text-muted-foreground hover:text-foreground"
-          >
+          <Link href="/dashboard/employees" className="text-muted-foreground hover:text-foreground">
             Employees
           </Link>
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -120,175 +233,215 @@ export default function EmployeeDetailPage() {
         </nav>
       </div>
 
-      <div className="flex flex-col gap-8 lg:flex-row lg:items-start">
-        <div className="shrink-0">
-          <div className="group relative">
-            <Button
-              variant="outline"
-              className="h-auto border-dashed p-2"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {employee.photoUrl ? (
-                <img
-                  src={employee.photoUrl}
-                  alt={displayName}
-                  className="h-32 w-32 rounded-md object-cover"
-                />
-              ) : (
-                <div className="flex h-32 w-32 flex-col items-center justify-center rounded-md bg-muted text-muted-foreground">
-                  <UserCircle className="h-12 w-12" />
-                  <span className="mt-1 text-xs">Upload photo</span>
+      {error && (
+        <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold">{displayName}</h2>
+        <p className="text-sm text-muted-foreground">
+          {employee.employeeNumber}
+          {employee.locationName ? ` · ${employee.locationName}` : ""}
+        </p>
+        <span
+          className={cn(
+            "mt-2 inline-block rounded-md px-2.5 py-0.5 text-xs font-medium",
+            employee.isActive
+              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              : "bg-muted text-muted-foreground"
+          )}
+        >
+          {employee.isActive ? "Active" : "Inactive"}
+        </span>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Profile</CardTitle>
+            {!editingProfile && (
+              <Button variant="ghost" size="sm" onClick={() => setEditingProfile(true)}>
+                Edit
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {editingProfile ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label>First name</Label>
+                    <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Last name</Label>
+                    <Input value={lastName} onChange={(e) => setLastName(e.target.value)} />
+                  </div>
                 </div>
-              )}
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handlePhotoUpload}
-              className="hidden"
-            />
-            <div className="absolute bottom-2 right-2 rounded-md bg-primary p-1.5 text-primary-foreground opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-              <Camera className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="mt-4">
-            <h2 className="text-xl font-semibold">{displayName}</h2>
-            <p className="text-sm text-muted-foreground">{employee.employeeNumber}</p>
-            <span
-              className={cn(
-                "mt-2 inline-block rounded-md px-2.5 py-0.5 text-xs font-medium",
-                employee.isActive
-                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                  : "bg-muted text-muted-foreground"
-              )}
-            >
-              {employee.isActive ? "Active" : "Inactive"}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Contact</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div>
-                <p className="text-muted-foreground">Email</p>
-                <p className="font-medium">{employee.email}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Employee number</p>
-                <p className="font-medium">{employee.employeeNumber}</p>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-muted-foreground" />
-                Clock ID
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="mb-3 text-sm text-muted-foreground">
-                Unique 4-digit ID the employee uses to clock in and out.
-              </p>
-              {isEditingClockId ? (
+                <div className="space-y-1">
+                  <Label>Email</Label>
+                  <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Employee number</Label>
+                  <Input value={employeeNumber} onChange={(e) => setEmployeeNumber(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Home location</Label>
+                  <Select value={locationId || "none"} onValueChange={(v) => setLocationId(v === "none" ? "" : v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Unassigned" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Unassigned</SelectItem>
+                      {locations.map((location) => (
+                        <SelectItem key={location.id} value={location.id}>
+                          {location.name}
+                          {location.isActive ? "" : " (inactive)"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="flex items-center gap-2">
-                  <Input
-                    value={clockId}
-                    onChange={(e) => {
-                      const v = e.target.value.replace(/\D/g, "").slice(0, 4);
-                      setClockId(v);
-                    }}
-                    placeholder="0000"
-                    maxLength={4}
-                    className="w-24 font-mono"
-                  />
-                  <Button size="sm" onClick={handleSaveClockId}>
-                    Save
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setIsEditingClockId(false);
-                      setClockId(employee.clockId ?? "");
-                    }}
-                  >
+                  <Checkbox id="active" checked={isActive} onCheckedChange={(c) => setIsActive(!!c)} />
+                  <Label htmlFor="active">Active</Label>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSaveProfile} disabled={busy}>Save</Button>
+                  <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditingProfile(false)}>
                     Cancel
                   </Button>
                 </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <p className="font-mono text-xl font-semibold">
-                    {employee.clockId ?? "—"}
-                  </p>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setIsEditingClockId(true)}
-                  >
-                    {employee.clockId ? "Edit" : "Assign"}
+              </div>
+            ) : (
+              <>
+                <div>
+                  <p className="text-muted-foreground">Email</p>
+                  <p className="font-medium">{employee.email}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Employee number</p>
+                  <p className="font-medium">{employee.employeeNumber}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Home location</p>
+                  <p className="font-medium">{employee.locationName ?? "Unassigned"}</p>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-muted-foreground" />
+              Clock PIN
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-sm text-muted-foreground">
+              4-digit PIN. It cannot start with 0, and it cannot match another employee.
+            </p>
+            {editingPin ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="1234"
+                  maxLength={4}
+                  className="w-24 font-mono"
+                />
+                <Button size="sm" onClick={handleSavePin} disabled={busy}>Save</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => { setEditingPin(false); setPin(""); }}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <p className="font-semibold font-mono">{employee.pin || "No PIN"}</p>
+                <div className="flex gap-2">
+                  {employee.hasPinSet && (
+                    <Button variant="ghost" size="sm" onClick={handleClearPin} disabled={busy}>Clear</Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => setEditingPin(true)} disabled={busy}>
+                    {employee.hasPinSet ? "Change" : "Set PIN"}
                   </Button>
                 </div>
-              )}
-            </CardContent>
-          </Card>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <DollarSign className="h-5 w-5 text-muted-foreground" />
-                Hourly Wage
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isEditing ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">$</span>
+        <Card className="lg:col-span-2">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <DollarSign className="h-5 w-5 text-muted-foreground" />
+              Pay
+            </CardTitle>
+            {!editingPay && (
+              <Button variant="ghost" size="sm" onClick={() => setEditingPay(true)}>Edit</Button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {editingPay ? (
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-1">
+                  <Label>Type</Label>
+                  <Select value={rateType} onValueChange={(v) => setRateType(v as RateType)}>
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Hourly">Hourly</SelectItem>
+                      <SelectItem value="Salary">Salary</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>{rateType === "Salary" ? "Salary amount" : "Hourly rate"}</Label>
                   <Input
                     type="number"
                     step="0.01"
                     min="0"
-                    value={hourlyRate}
-                    onChange={(e) => setHourlyRate(e.target.value)}
-                    className="w-32"
+                    value={payAmount}
+                    onChange={(e) => setPayAmount(e.target.value)}
+                    className="w-36"
                   />
-                  <Button size="sm" onClick={handleSaveWage}>
-                    Save
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setIsEditing(false);
-                      setHourlyRate(
-                        employee.wageRate
-                          ? String(employee.wageRate.hourlyRate)
-                          : ""
-                      );
-                    }}
-                  >
-                    Cancel
-                  </Button>
                 </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <p className="text-2xl font-semibold">
-                    ${employee.wageRate?.hourlyRate?.toFixed(2) ?? "—"}
+                <Button size="sm" onClick={handleSavePay} disabled={busy}>Save</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditingPay(false)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <p className="text-2xl font-semibold">{payLabel}</p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {employee.wageRate?.rateType === "Salary"
+                ? "Salary employees still punch. Hours show on the time grid. Pay is this salary, not hours times a rate."
+                : "Changing this rate updates unverified days that were not given their own rate. Verified periods keep the rate they were locked with."}
+            </p>
+            {history.length > 0 && (
+              <div className="space-y-1 text-sm">
+                <p className="font-medium">Rate history</p>
+                {history.map((row) => (
+                  <p key={row.id} className="text-muted-foreground">
+                    {new Date(row.effectiveFrom).toLocaleDateString()} –{" "}
+                    {row.effectiveTo ? new Date(row.effectiveTo).toLocaleDateString() : "current"}
+                    {": "}
+                    {row.rateType === "Salary"
+                      ? `Salary $${row.salaryAmount?.toFixed(2) ?? "—"}`
+                      : `$${row.hourlyRate?.toFixed(2) ?? "—"}/hr`}
                   </p>
-                  <Button variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
-                    Edit
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

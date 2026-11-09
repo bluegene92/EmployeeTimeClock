@@ -5,11 +5,12 @@
 
 ## 1. Executive Summary
 
-An end-to-end employee time clock management system consisting of:
-- **Windows Desktop App** — NFC-based clock in/out for employees
-- **Next.js Web App** — Admin portal for employee & NFC management
-- **.NET API Server** — Central backend with Microsoft SQL database
-- **Offline-first desktop** with sync when network is available
+An employee time clock management system consisting of:
+- **Next.js Web App** — Admin portal for employees, PIN clock IDs, wages, and time punches (runs locally)
+- **.NET API Server** — Central backend on Render
+- **PostgreSQL** — Managed database on Render
+
+A Windows desktop clock-in app is owned by another team and is out of this repository. This API keeps PIN verify and employee-sync endpoints for that team.
 
 ---
 
@@ -18,38 +19,33 @@ An end-to-end employee time clock management system consisting of:
 ```
 ┌─────────────────────────────────────── CLIENT LAYER ───────────────────────────────────────┐
 │                                                                                             │
-│  ┌──────────────────────────────┐                    ┌──────────────────────────────────┐   │
-│  │  Windows Desktop App         │                    │  Next.js Admin Web App           │   │
-│  │  (WPF / WinUI / Electron)    │                    │  • Employee CRUD                 │   │
-│  │  • NFC card reader           │                    │  • NFC card association          │   │
-│  │  • Local SQLite storage      │                    │  • Time reports & wages          │   │
-│  │  • Offline queue & sync      │                    │  • Settings & configuration     │   │
-│  └──────────────┬───────────────┘                    └──────────────┬───────────────────┘   │
-│                 │                                                   │                        │
-│                 │ HTTPS (when online)                               │ HTTPS                  │
-│                 └───────────────────────┬───────────────────────────┘                        │
-└─────────────────────────────────────────┼───────────────────────────────────────────────────┘
-                                          ▼
+│  ┌──────────────────────────────────┐                                                       │
+│  │  Next.js Admin Web App (local)   │                                                       │
+│  │  • Employee CRUD                 │                                                       │
+│  │  • 4-digit PIN association       │                                                       │
+│  │  • Time reports & wages          │                                                       │
+│  │  • Settings & configuration      │                                                       │
+│  └─────────────────┬────────────────┘                                                       │
+│                    │ HTTPS (CORS: localhost)                                                │
+└────────────────────┼────────────────────────────────────────────────────────────────────────┘
+                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    API LAYER                                                │
+│                                    API LAYER (Render)                                       │
 │  ┌──────────────────────────────────────────────────────────────────────────────────────┐   │
-│  │  .NET 8 Web API (ASP.NET Core)                                                        │   │
+│  │  .NET 9 Web API (ASP.NET Core, Docker)                                                │   │
 │  │  • RESTful endpoints                                                                  │   │
-│  │  • JWT / API Key auth                                                                 │   │
-│  │  • Serves both desktop app and admin web app                                          │   │
+│  │  • PIN verify / employee sync for the desktop clock team                              │   │
 │  └─────────────────────────────────────────────┬────────────────────────────────────────┘   │
 └────────────────────────────────────────────────┼────────────────────────────────────────────┘
-                                                 │
                                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    DATA LAYER                                               │
-│  ┌────────────────────────────┐     ┌────────────────────────────────────────────────────┐  │
-│  │  Microsoft SQL Server      │     │  Desktop (local): SQLite                            │  │
-│  │  • Employees               │     │  • Pending punch records (offline queue)            │  │
-│  │  • NFC card mappings       │     │  • Cached employee/card data for offline lookup     │  │
-│  │  • Time punches            │     │  • Sync queue                                       │  │
-│  │  • Wage rates              │     │                                                    │  │
-│  └────────────────────────────┘     └────────────────────────────────────────────────────┘  │
+│                                    DATA LAYER (Render)                                      │
+│  ┌──────────────────────────────────────────────────────────────────────────────────────┐   │
+│  │  PostgreSQL                                                                           │   │
+│  │  • Employees (including PIN hash)                                                     │   │
+│  │  • Time punches                                                                       │   │
+│  │  • Wage rates                                                                         │   │
+│  └──────────────────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -57,69 +53,38 @@ An end-to-end employee time clock management system consisting of:
 
 ## 3. Application Plan
 
-### 3.1 Windows Desktop Application (Employee Clock)
-
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| NFC card read | Detect card tap, read UID, look up employee | P0 |
-| Clock in | Record punch-in with timestamp, employee ID | P0 |
-| Clock out | Record punch-out with timestamp | P0 |
-| Local storage | SQLite for punches & cached employee/card data | P0 |
-| Offline mode | Queue punches when offline, sync when online | P0 |
-| Sync service | Push pending punches to API, pull updates | P0 |
-| Visual feedback | Success/error animations, sound cues | P1 |
-| Settings | API URL, sync interval, device name | P1 |
-| Auto-start / kiosk mode | Run on Windows startup, optional full-screen | P2 |
-
-**Technology options:** WPF (.NET 8), WinUI 3, or Electron + Node NFC bindings
-
-**NFC libraries:**  
-- Windows: `nfc-sharp`, `pcsc-sharp` (PC/SC)  
-- Or device-specific SDK (e.g. ACR122U SDK)
-
----
-
-### 3.2 .NET API Server
+### 3.1 .NET API Server (Render)
 
 | Endpoint / Area | Method | Description |
 |-----------------|--------|-------------|
 | **Auth** | | |
-| `/api/auth/login` | POST | Admin login (JWT) |
-| `/api/auth/desktop-token` | POST | Desktop app API key validation |
+| `/api/auth/verify-pin` | POST | Verify 4-digit PIN (desktop clock team) |
 | **Employees** | | |
 | `/api/employees` | GET, POST | List, create employees |
 | `/api/employees/{id}` | GET, PUT, DELETE | Get, update, delete |
-| `/api/employees/{id}/nfc-cards` | GET, POST, DELETE | Manage NFC card association |
+| `/api/employees/{id}/pin` | PUT, DELETE | Set or clear 4-digit PIN |
+| `/api/employees/{id}/wages` | GET, PUT | Current wage rate |
 | **Time Punches** | | |
-| `/api/punches` | GET | List punches (filters: date, employee) |
-| `/api/punches/sync` | POST | Batch receive punches from desktop |
-| `/api/punches/export` | GET | Export for payroll (CSV, etc.) |
-| **Wages** | | |
-| `/api/employees/{id}/wages` | GET, POST | Wage rates per employee |
+| `/api/timepunches` | GET, POST | List (date/employee filters), create |
+| `/api/timepunches/{id}` | PUT, DELETE | Update, delete |
+| `/api/timepunches/sync` | POST | Batch receive punches (desktop team) |
 | **Desktop Sync** | | |
-| `/api/sync/employees` | GET | Full employee + card list for desktop cache |
-| `/api/sync/punches` | POST | Accept batch of punches from desktop |
+| `/api/sync/employees` | GET | Active employees + HasPinSet for desktop cache |
 | **Health** | | |
-| `/health` | GET | Health check |
+| `/api/health` | GET | Health check |
 
----
-
-### 3.3 Next.js Admin Web Application
+### 3.2 Next.js Admin Web Application (local)
 
 | Module | Features |
 |--------|----------|
-| **Dashboard** | Today’s punches, active employees, quick stats |
 | **Employees** | List, add, edit, deactivate; search, filters |
-| **NFC Cards** | Associate/unlink cards to employees; scan/test |
+| **PIN** | Set or clear a 4-digit clock PIN (hash stored; PIN is not shown after save) |
 | **Time Punches** | View, filter, edit, delete; date range, employee |
-| **Wages** | Set hourly/salary rates; effective dates |
-| **Reports** | Hours worked, overtime, export for payroll |
-| **Settings** | Company info, punch rules (rounding, grace period) |
-| **Users** | Admin users, roles (future) |
+| **Wages** | Set hourly rates |
+| **Reports** | Hours worked, overtime, export for payroll (placeholder) |
+| **Settings** | Company info, punch rules (placeholder) |
 
----
-
-### 3.4 Data Model (Core Entities)
+### 3.3 Data Model (Core Entities)
 
 ```
 Employees
@@ -129,26 +94,17 @@ Employees
 ├── Email
 ├── EmployeeNumber (unique)
 ├── IsActive
+├── PinHash (bcrypt; never returned to clients)
 ├── CreatedAt, UpdatedAt
 └── WageRates[] (one-to-many)
-
-NfcCards
-├── Id (GUID)
-├── CardUid (string, unique) — from NFC reader
-├── EmployeeId (FK)
-├── IsActive
-├── RegisteredAt
-└── LastUsedAt
 
 TimePunches
 ├── Id (GUID)
 ├── EmployeeId (FK)
 ├── PunchType (In / Out)
 ├── PunchedAt (DateTime, UTC)
-├── Source (Desktop / Web)
-├── DeviceId (desktop identifier)
-├── SyncedAt (null if from API directly)
-└── RawCardUid (for reconciliation)
+├── Source (Web / Desktop)
+└── DeviceId (desktop identifier)
 
 WageRates
 ├── Id (GUID)
@@ -177,16 +133,12 @@ WageRates
 | **Primary** | `#2563EB` | CTAs, links, active states |
 | **Primary Hover** | `#1D4ED8` | Button hover |
 | **Success** | `#059669` | Clock in/out success, confirmations |
-| **Error** | `#DC2626` | Errors, invalid card, warnings |
-| **Warning** | `#D97706` | Pending sync, attention needed |
+| **Error** | `#DC2626` | Errors, invalid PIN, warnings |
+| **Warning** | `#D97706` | Attention needed |
 | **Neutral 50** | `#F9FAFB` | Page backgrounds |
 | **Neutral 100** | `#F3F4F6` | Card backgrounds |
 | **Neutral 700** | `#374151` | Body text |
 | **Neutral 900** | `#111827` | Headings |
-
-**Desktop app accent:**  
-- Success: `#059669` (clock in/out OK)  
-- Error: `#DC2626` (unknown card, sync failed)
 
 ---
 
@@ -244,54 +196,28 @@ WageRates
 
 ---
 
-### 4.6 Desktop App UI
+### 4.6 Icons
 
-- **Full-screen / kiosk:** Large “Tap card to clock in/out” area
-- **States:**
-  - Idle: Neutral gray, icon + “Tap your NFC card”
-  - Success: Green flash, checkmark, employee name + time
-  - Error: Red flash, “Card not recognized”
-  - Offline: Yellow banner “Working offline — will sync when connected”
-- **Font:** Large, readable from a distance (e.g. 32px+ for status)
-
----
-
-### 4.7 Icons
-
-- **Library:** Lucide React (Next.js), Lucide or similar for desktop
-- **Primary icons:** Clock, User, CreditCard (NFC), Check, X, AlertCircle, Wifi, WifiOff
+- **Library:** Lucide React (Next.js)
+- **Primary icons:** Clock, User, Check, X, AlertCircle
 
 ---
 
 ## 5. User Flows
 
-### 5.1 Employee: Clock In
-
-1. Employee taps NFC card on reader
-2. Desktop reads card UID
-3. Desktop looks up UID in local cache
-4. If found: create punch (type: In), show success + name + time
-5. If not found: show “Card not recognized”
-6. If offline: store punch in local queue; sync when online
-
-### 5.2 Employee: Clock Out
-
-Same as clock in, but punch type = Out. Optional: validate that last punch was In.
-
-### 5.3 Admin: Associate NFC Card
+### 5.1 Admin: Associate PIN
 
 1. Admin opens Employee detail in Next.js
-2. Clicks “Add NFC card”
-3. Desktop app or USB reader in admin PC: tap card
-4. Card UID sent to API; API associates with employee
-5. Admin sees card listed; desktop pulls updated cache on next sync
+2. Clicks “Set PIN”
+3. Enters a 4-digit PIN; API stores only the hash
+4. Admin sees “PIN set” (the PIN is never shown again)
 
-### 5.4 Admin: View & Export Time
+### 5.2 Admin: View & Edit Time
 
-1. Admin opens Time Punches or Reports
-2. Filters by date range, employee
-3. Views table; edits if needed (e.g. manual correction)
-4. Exports CSV for payroll
+1. Admin opens Time Clock
+2. Filters by bi-weekly period
+3. Clicks a day cell to add, edit, or delete punches
+4. Hours and wages update from punch pairs and hourly rate
 
 ---
 
@@ -299,12 +225,11 @@ Same as clock in, but punch type = Out. Optional: validate that last punch was I
 
 | Area | Approach |
 |------|----------|
-| API auth | JWT for admin; API key for desktop app |
-| Desktop app | Store API key in secure storage (e.g. Windows Credential Manager) |
-| NFC spoofing | Log raw UID; consider additional validation if high security |
-| SQL injection | Parameterized queries / EF Core |
-| HTTPS | Enforce everywhere |
-| CORS | Restrict admin/API origins |
+| Admin login | Local session placeholder (JWT planned) |
+| PIN | Bcrypt hash only; never returned by the API |
+| SQL injection | Parameterized queries / Dapper |
+| HTTPS | Render terminates TLS at the edge |
+| CORS | Allow the local admin origin (`http://localhost:3000`) |
 
 ---
 
@@ -312,26 +237,26 @@ Same as clock in, but punch type = Out. Optional: validate that last punch was I
 
 | Layer | Technology |
 |-------|------------|
-| Desktop | WPF / WinUI 3 / Electron, .NET 8 or Node, SQLite, PC/SC for NFC |
-| API | ASP.NET Core 8, Entity Framework Core, SQL Server |
-| Admin Web | Next.js 14+, React, Tailwind CSS |
-| Database | Microsoft SQL Server |
-| Auth | JWT, API keys |
+| API | ASP.NET Core 9, Dapper, Npgsql, Docker on Render |
+| Admin Web | Next.js 16, React, Tailwind CSS (runs locally) |
+| Database | PostgreSQL on Render |
+| Deploy | Render Blueprint (`render.yaml`) |
 
 ---
 
-## 8. Project Structure (Suggested)
+## 8. Project Structure
 
 ```
 EmployeeTimeClock/
 ├── src/
-│   ├── TimeClock.Desktop/          # Windows app
 │   ├── TimeClock.Api/              # .NET Web API
-│   ├── TimeClock.Admin/            # Next.js admin
-│   └── TimeClock.Shared/           # Shared DTOs, constants
-├── docs/
-│   └── APP_PLAN_AND_DESIGN_SYSTEM.md
-└── README.md
+│   └── timeclock-admin/            # Next.js admin (local)
+├── database/
+│   └── 001_CreateSchema_PostgreSQL.sql
+├── Dockerfile
+├── render.yaml
+├── DEPLOYMENT.md
+└── APP_PLAN_AND_DESIGN_SYSTEM.md
 ```
 
 ---
@@ -340,11 +265,11 @@ EmployeeTimeClock/
 
 | Phase | Scope |
 |-------|-------|
-| **Phase 1** | API + SQL schema, basic employee CRUD, NFC card association |
-| **Phase 2** | Desktop app: NFC read, local storage, clock in/out, sync |
-| **Phase 3** | Admin web: dashboard, punches, reports, export |
-| **Phase 4** | Wages, rounding rules, overtime, polish |
+| **Phase 1** | API + Postgres schema, employee CRUD, PIN, wages, punch CRUD |
+| **Phase 2** | Admin web wired to hosted API |
+| **Phase 3** | Reports, export, punch rules |
+| **Phase 4** | Admin JWT auth |
 
 ---
 
-*Document version: 1.0 — Employee Time Clock Management System*
+*Document version: 1.1 — Employee Time Clock Management System (Render)*

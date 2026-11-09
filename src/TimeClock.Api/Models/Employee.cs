@@ -1,5 +1,3 @@
-using System.Text.Json.Serialization;
-
 namespace TimeClock.Api.Models;
 
 public class Employee
@@ -10,9 +8,13 @@ public class Employee
     public string Email { get; set; } = string.Empty;
     public string EmployeeNumber { get; set; } = string.Empty;
     public bool IsActive { get; set; }
-    [JsonIgnore]
-    public string? PinHash { get; set; }
-    public bool HasPinSet => !string.IsNullOrEmpty(PinHash);
+    public bool IsDeleted { get; set; }
+    public DateTime? DeletedAt { get; set; }
+    public string? Pin { get; set; }
+    public bool HasPinSet => !string.IsNullOrEmpty(Pin);
+    public Guid? LocationId { get; set; }
+    public string? LocationName { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public WageRate? WageRate { get; set; }
 }
