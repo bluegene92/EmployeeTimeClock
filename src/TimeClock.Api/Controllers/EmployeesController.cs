@@ -35,6 +35,44 @@ public class EmployeesController : ControllerBase
         return Ok(list);
     }
 
+    [HttpGet("next-number")]
+    public async Task<ActionResult<NextEmployeeNumberResponse>> GetNextNumber(CancellationToken ct)
+    {
+        var number = await _employees.GetNextEmployeeNumberAsync(ct);
+        if (number is null)
+            return BadRequest(new { message = "No 4-digit employee numbers are left." });
+        return Ok(new NextEmployeeNumberResponse(number));
+    }
+
+    [HttpGet("employee-number/check")]
+    public async Task<ActionResult<EmployeeNumberCheckResponse>> CheckEmployeeNumber(
+        [FromQuery] string? number,
+        [FromQuery] Guid? excludeId,
+        CancellationToken ct)
+    {
+        var trimmed = number?.Trim() ?? "";
+        var message = await _employees.CheckEmployeeNumberAsync(trimmed, excludeId, ct);
+        return Ok(new EmployeeNumberCheckResponse(trimmed, message is null, message));
+    }
+
+    [HttpPost("{id:guid}/employee-number")]
+    public async Task<ActionResult<Employee>> GenerateEmployeeNumber(Guid id, CancellationToken ct)
+    {
+        var error = await _employees.AssignGeneratedNumberAsync(id, ct);
+        if (error is not null)
+        {
+            if (error == "Employee not found.")
+                return NotFound(new { message = error });
+            return BadRequest(new { message = error });
+        }
+
+        var employee = await _employees.GetByIdAsync(id, ct);
+        if (employee is null)
+            return NotFound();
+        employee.WageRate = await _wages.GetCurrentByEmployeeIdAsync(id, ct);
+        return Ok(employee);
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<Employee>> GetById(Guid id, CancellationToken ct)
     {
@@ -48,7 +86,15 @@ public class EmployeesController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<Employee>> Create([FromBody] CreateEmployeeRequest request, CancellationToken ct)
     {
-        var error = await ValidateAsync(request.FirstName, request.LastName, request.Email, request.EmployeeNumber, request.LocationId, null, ct);
+        var error = await ValidateAsync(
+            request.FirstName,
+            request.LastName,
+            request.Email,
+            request.EmployeeNumber,
+            request.LocationId,
+            null,
+            requireEmployeeNumber: !request.GenerateEmployeeNumber,
+            ct);
         if (error is not null)
             return BadRequest(new { message = error });
 
@@ -61,19 +107,29 @@ public class EmployeesController : ControllerBase
             FirstName = request.FirstName.Trim(),
             LastName = request.LastName.Trim(),
             Email = request.Email.Trim(),
-            EmployeeNumber = request.EmployeeNumber.Trim(),
+            EmployeeNumber = request.GenerateEmployeeNumber ? "" : request.EmployeeNumber.Trim(),
             IsActive = request.IsActive,
             LocationId = request.LocationId
         };
 
         Guid id;
-        try
+        if (request.GenerateEmployeeNumber)
         {
-            id = await _employees.CreateAsync(employee, ct);
+            var generated = await _employees.CreateWithGeneratedNumberAsync(employee, ct);
+            if (!generated.Success)
+                return BadRequest(new { message = generated.Error });
+            id = generated.Id;
         }
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        else
         {
-            return BadRequest(new { message = "Employee number is already in use." });
+            try
+            {
+                id = await _employees.CreateAsync(employee, ct);
+            }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                return BadRequest(new { message = "Employee number is already in use." });
+            }
         }
 
         if (request.RateType == RateType.Salary && request.SalaryAmount is decimal salary)
@@ -94,7 +150,7 @@ public class EmployeesController : ControllerBase
         if (existing is null || existing.IsDeleted)
             return NotFound();
 
-        var error = await ValidateAsync(request.FirstName, request.LastName, request.Email, request.EmployeeNumber, request.LocationId, id, ct);
+        var error = await ValidateAsync(request.FirstName, request.LastName, request.Email, request.EmployeeNumber, request.LocationId, id, requireEmployeeNumber: true, ct);
         if (error is not null)
             return BadRequest(new { message = error });
 
@@ -142,18 +198,19 @@ public class EmployeesController : ControllerBase
         string employeeNumber,
         Guid? locationId,
         Guid? currentId,
+        bool requireEmployeeNumber,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(firstName) || string.IsNullOrWhiteSpace(lastName))
             return "First and last name are required.";
         if (string.IsNullOrWhiteSpace(email))
             return "Email is required.";
-        if (string.IsNullOrWhiteSpace(employeeNumber))
-            return "Employee number is required.";
-
-        var existingNumber = await _employees.GetByEmployeeNumberAsync(employeeNumber.Trim(), ct);
-        if (existingNumber is not null && existingNumber.Id != currentId)
-            return "Employee number is already in use.";
+        if (requireEmployeeNumber)
+        {
+            var numberError = await _employees.CheckEmployeeNumberAsync(employeeNumber ?? "", currentId, ct);
+            if (numberError is not null)
+                return numberError;
+        }
 
         if (locationId is Guid location)
         {
@@ -192,7 +249,12 @@ public record CreateEmployeeRequest(
     Guid? LocationId = null,
     RateType RateType = RateType.Hourly,
     decimal? HourlyRate = null,
-    decimal? SalaryAmount = null);
+    decimal? SalaryAmount = null,
+    bool GenerateEmployeeNumber = false);
+
+public record NextEmployeeNumberResponse(string EmployeeNumber);
+
+public record EmployeeNumberCheckResponse(string EmployeeNumber, bool Available, string? Message);
 
 public record UpdateEmployeeRequest(
     string FirstName,

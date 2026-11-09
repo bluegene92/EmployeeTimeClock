@@ -12,7 +12,8 @@ public class AuthController : ControllerBase
     public AuthController(IEmployeeRepository employees) => _employees = employees;
 
     /// <summary>
-    /// Verify a 4-digit PIN and return the employee. Used by the clock app.
+    /// Verify a 4-digit PIN or employee number and return the employee. Used by the clock app
+    /// when someone clocks in without an NFC badge.
     /// </summary>
     [HttpPost("verify-pin")]
     public async Task<ActionResult<VerifyPinResponse>> VerifyPin([FromBody] VerifyPinRequest request, CancellationToken ct)

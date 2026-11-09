@@ -44,6 +44,10 @@ async function proxy(request: NextRequest, context: RouteContext) {
   const responseHeaders = new Headers();
   const upstreamType = upstream.headers.get("content-type");
   if (upstreamType) responseHeaders.set("content-type", upstreamType);
+  // The Response constructor throws if a body is passed with these statuses.
+  if (upstream.status === 204 || upstream.status === 205 || upstream.status === 304) {
+    return new NextResponse(null, { status: upstream.status, headers: responseHeaders });
+  }
   return new NextResponse(await upstream.arrayBuffer(), {
     status: upstream.status,
     headers: responseHeaders,

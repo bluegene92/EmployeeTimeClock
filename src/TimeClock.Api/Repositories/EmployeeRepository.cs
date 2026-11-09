@@ -1,3 +1,4 @@
+using System.Globalization;
 using Dapper;
 using Npgsql;
 using TimeClock.Api.Data;
@@ -25,6 +26,29 @@ public class EmployeeRepository : IEmployeeRepository
         FROM "Employees" e
         LEFT JOIN "Locations" l ON l."Id" = e."LocationId"
         """;
+
+    /// <summary>
+    /// Smallest unused code from 1000 through 9999. Open 4-digit employee numbers and PINs
+    /// are both taken, so the generated code cannot match another person's clock code.
+    /// </summary>
+    private const string NextNumberSql = """
+        SELECT s.n
+        FROM generate_series(1000, 9999) AS s(n)
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM "Employees" e
+            WHERE e."IsDeleted" = false
+              AND (@ExcludeId IS NULL OR e."Id" <> @ExcludeId)
+              AND (
+                    (e."EmployeeNumber" ~ '^[1-9][0-9]{3}$' AND e."EmployeeNumber"::int = s.n)
+                    OR (e."Pin" ~ '^[1-9][0-9]{3}$' AND e."Pin"::int = s.n)
+                  )
+        )
+        ORDER BY s.n
+        LIMIT 1
+        """;
+
+    private const long EmployeeNumberLockKey = 7421000;
 
     private readonly IDbConnectionFactory _db;
 
@@ -101,6 +125,118 @@ public class EmployeeRepository : IEmployeeRepository
         return id;
     }
 
+    public async Task<CreateEmployeeResult> CreateWithGeneratedNumberAsync(Employee employee, CancellationToken ct = default)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var conn = _db.CreateConnection();
+                conn.Open();
+                using var tx = conn.BeginTransaction();
+                await LockNumbersAsync(conn, tx, ct);
+                var number = await NextNumberAsync(conn, tx, null, ct);
+                if (number is null)
+                    return CreateEmployeeResult.Fail("No 4-digit employee numbers are left.");
+
+                var id = Guid.NewGuid();
+                var now = DateTime.UtcNow;
+                var sql = """
+                    INSERT INTO "Employees" (
+                        "Id", "FirstName", "LastName", "Email", "EmployeeNumber",
+                        "IsActive", "IsDeleted", "Pin", "LocationId", "CreatedAt", "UpdatedAt"
+                    )
+                    VALUES (
+                        @Id, @FirstName, @LastName, @Email, @EmployeeNumber,
+                        @IsActive, false, @Pin, @LocationId, @CreatedAt, @UpdatedAt
+                    )
+                    """;
+                await conn.ExecuteAsync(new CommandDefinition(sql, new
+                {
+                    Id = id,
+                    employee.FirstName,
+                    employee.LastName,
+                    employee.Email,
+                    EmployeeNumber = number,
+                    employee.IsActive,
+                    Pin = number,
+                    employee.LocationId,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                }, tx, cancellationToken: ct));
+                tx.Commit();
+                return CreateEmployeeResult.Ok(id);
+            }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                if (attempt == 2)
+                    return CreateEmployeeResult.Fail("Employee number is already in use.");
+            }
+        }
+
+        return CreateEmployeeResult.Fail("Employee number is already in use.");
+    }
+
+    public async Task<string?> GetNextEmployeeNumberAsync(CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        return await NextNumberAsync(conn, null, null, ct);
+    }
+
+    public async Task<string?> AssignGeneratedNumberAsync(Guid id, CancellationToken ct = default)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var conn = _db.CreateConnection();
+                conn.Open();
+                using var tx = conn.BeginTransaction();
+                await LockNumbersAsync(conn, tx, ct);
+
+                var exists = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
+                    """SELECT EXISTS(SELECT 1 FROM "Employees" WHERE "Id" = @Id AND "IsDeleted" = false)""",
+                    new { Id = id },
+                    tx,
+                    cancellationToken: ct));
+                if (!exists)
+                    return "Employee not found.";
+
+                var number = await NextNumberAsync(conn, tx, id, ct);
+                if (number is null)
+                    return "No 4-digit employee numbers are left.";
+
+                var sql = """
+                    UPDATE "Employees"
+                    SET "EmployeeNumber" = @EmployeeNumber,
+                        "Pin" = @Pin,
+                        "UpdatedAt" = @UpdatedAt
+                    WHERE "Id" = @Id
+                      AND "IsDeleted" = false
+                    """;
+                var rows = await conn.ExecuteAsync(new CommandDefinition(sql, new
+                {
+                    Id = id,
+                    EmployeeNumber = number,
+                    Pin = number,
+                    UpdatedAt = DateTime.UtcNow
+                }, tx, cancellationToken: ct));
+                if (rows == 0)
+                    return "Employee not found.";
+
+                tx.Commit();
+                return null;
+            }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                if (attempt == 2)
+                    return "Employee number is already in use.";
+            }
+        }
+
+        return "Employee number is already in use.";
+    }
+
     public async Task<bool> UpdateAsync(Employee employee, CancellationToken ct = default)
     {
         var sql = """
@@ -161,9 +297,13 @@ public class EmployeeRepository : IEmployeeRepository
         if (employee is null || employee.IsDeleted)
             return PinUpdateResult.Fail("Employee not found.");
 
-        var taken = await FindActiveByPinAsync(pin, ct);
-        if (taken is not null && taken.Id != id)
-            return PinUpdateResult.Fail($"That PIN is already assigned to {taken.FirstName} {taken.LastName}.");
+        var taken = await FindOtherByCodeAsync(pin, id, includePin: true, ct);
+        if (taken is not null)
+        {
+            return PinUpdateResult.Fail(taken.EmployeeNumber == pin
+                ? $"{pin} is already the employee number for {taken.FirstName} {taken.LastName}."
+                : $"That PIN is already assigned to {taken.FirstName} {taken.LastName}.");
+        }
 
         var sql = """
             UPDATE "Employees"
@@ -215,8 +355,38 @@ public class EmployeeRepository : IEmployeeRepository
                AND e."IsActive" = true
             """;
         using var conn = _db.CreateConnection();
-        return await conn.QuerySingleOrDefaultAsync<Employee>(
+        var byPin = await conn.QuerySingleOrDefaultAsync<Employee>(
             new CommandDefinition(sql, new { Pin = pin }, cancellationToken: ct));
+        if (byPin is not null)
+            return byPin;
+
+        var byNumber = await GetByEmployeeNumberAsync(pin, ct);
+        if (byNumber is null || !byNumber.IsActive)
+            return null;
+        return byNumber;
+    }
+
+    private static Task LockNumbersAsync(System.Data.IDbConnection conn, System.Data.IDbTransaction tx, CancellationToken ct)
+        => conn.ExecuteAsync(new CommandDefinition(
+            "SELECT pg_advisory_xact_lock(@Key)",
+            new { Key = EmployeeNumberLockKey },
+            tx,
+            cancellationToken: ct));
+
+    private static async Task<string?> NextNumberAsync(
+        System.Data.IDbConnection conn,
+        System.Data.IDbTransaction? tx,
+        Guid? excludeId,
+        CancellationToken ct)
+    {
+        var next = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+            NextNumberSql,
+            new { ExcludeId = excludeId },
+            tx,
+            cancellationToken: ct));
+        if (next is null or < 1000 or > 9999)
+            return null;
+        return next.Value.ToString(CultureInfo.InvariantCulture);
     }
 
     public static bool IsValidPin(string? pin)
@@ -225,6 +395,22 @@ public class EmployeeRepository : IEmployeeRepository
            && pin[0] >= '1'
            && pin[0] <= '9'
            && pin.All(char.IsDigit);
+
+    public async Task<string?> CheckEmployeeNumberAsync(string employeeNumber, Guid? excludeId, CancellationToken ct = default)
+    {
+        var number = employeeNumber.Trim();
+        if (number.Length == 0)
+            return "Employee number is required.";
+        if (number.Length > 50)
+            return "Employee number must be 50 characters or fewer.";
+
+        var owner = await FindOtherByCodeAsync(number, excludeId, includePin: IsValidPin(number), ct);
+        if (owner is null)
+            return null;
+        return owner.EmployeeNumber == number
+            ? $"Employee number {number} is already used by {owner.FirstName} {owner.LastName}."
+            : $"{number} is already the clock PIN for {owner.FirstName} {owner.LastName}.";
+    }
 
     private async Task<Employee?> FindActiveByPinAsync(string pin, CancellationToken ct)
     {
@@ -235,5 +421,23 @@ public class EmployeeRepository : IEmployeeRepository
         using var conn = _db.CreateConnection();
         return await conn.QuerySingleOrDefaultAsync<Employee>(
             new CommandDefinition(sql, new { Pin = pin }, cancellationToken: ct));
+    }
+
+    /// <summary>
+    /// An open employee other than <paramref name="excludeId"/> whose employee number, or PIN when
+    /// <paramref name="includePin"/> is set, equals <paramref name="code"/>.
+    /// </summary>
+    private async Task<Employee?> FindOtherByCodeAsync(string code, Guid? excludeId, bool includePin, CancellationToken ct)
+    {
+        var sql = SelectSql + """
+             WHERE e."IsDeleted" = false
+               AND (@ExcludeId IS NULL OR e."Id" <> @ExcludeId)
+               AND (e."EmployeeNumber" = @Code OR (@IncludePin AND e."Pin" = @Code))
+             ORDER BY (e."EmployeeNumber" = @Code) DESC
+             LIMIT 1
+            """;
+        using var conn = _db.CreateConnection();
+        return await conn.QueryFirstOrDefaultAsync<Employee>(
+            new CommandDefinition(sql, new { Code = code, ExcludeId = excludeId, IncludePin = includePin }, cancellationToken: ct));
     }
 }

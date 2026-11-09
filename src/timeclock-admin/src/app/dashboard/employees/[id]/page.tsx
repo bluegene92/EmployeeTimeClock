@@ -6,7 +6,9 @@ import { useParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Clock, DollarSign } from "lucide-react";
 import type { Employee, Location, RateType, WageRate } from "@/types/employee";
 import {
+  checkEmployeeNumber,
   clearEmployeePin,
+  generateEmployeeNumber,
   getEmployee,
   listLocations,
   listWageHistory,
@@ -43,6 +45,7 @@ export default function EmployeeDetailPage() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [employeeNumber, setEmployeeNumber] = useState("");
+  const [numberError, setNumberError] = useState<string | null>(null);
   const [locationId, setLocationId] = useState("");
   const [isActive, setIsActive] = useState(true);
 
@@ -102,6 +105,21 @@ export default function EmployeeDetailPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const handleCheckNumber = async () => {
+    if (!employee) return;
+    const value = employeeNumber.trim();
+    if (!value || value === employee.employeeNumber) {
+      setNumberError(null);
+      return;
+    }
+    try {
+      const result = await checkEmployeeNumber(value, employee.id);
+      setNumberError(result.available ? null : result.message);
+    } catch (err) {
+      setNumberError(err instanceof Error ? err.message : "Could not check the employee number.");
+    }
+  };
 
   const handleSaveProfile = async () => {
     if (!employee) return;
@@ -164,6 +182,27 @@ export default function EmployeeDetailPage() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update PIN.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleGenerateNumber = async () => {
+    if (!employee) return;
+    const confirmed = window.confirm(
+      `Replace employee number ${employee.employeeNumber} with the next number starting at 1000? The employee will use that number to clock in or out without an NFC badge.`
+    );
+    if (!confirmed) return;
+    try {
+      setBusy(true);
+      await generateEmployeeNumber(employee.id);
+      await load();
+      setEditingProfile(false);
+      setPin("");
+      setEditingPin(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate an employee number.");
     } finally {
       setBusy(false);
     }
@@ -286,7 +325,15 @@ export default function EmployeeDetailPage() {
                 </div>
                 <div className="space-y-1">
                   <Label>Employee number</Label>
-                  <Input value={employeeNumber} onChange={(e) => setEmployeeNumber(e.target.value)} />
+                  <Input
+                    value={employeeNumber}
+                    onChange={(e) => {
+                      setEmployeeNumber(e.target.value);
+                      setNumberError(null);
+                    }}
+                    onBlur={handleCheckNumber}
+                  />
+                  {numberError && <p className="text-xs text-destructive">{numberError}</p>}
                 </div>
                 <div className="space-y-1">
                   <Label>Home location</Label>
@@ -310,8 +357,17 @@ export default function EmployeeDetailPage() {
                   <Label htmlFor="active">Active</Label>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSaveProfile} disabled={busy}>Save</Button>
-                  <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditingProfile(false)}>
+                  <Button size="sm" onClick={handleSaveProfile} disabled={busy || !!numberError}>Save</Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => {
+                      setEditingProfile(false);
+                      setEmployeeNumber(employee.employeeNumber);
+                      setNumberError(null);
+                    }}
+                  >
                     Cancel
                   </Button>
                 </div>
@@ -324,7 +380,21 @@ export default function EmployeeDetailPage() {
                 </div>
                 <div>
                   <p className="text-muted-foreground">Employee number</p>
-                  <p className="font-medium">{employee.employeeNumber}</p>
+                  <div className="mt-1 flex items-center gap-3">
+                    <p className="font-medium font-mono">{employee.employeeNumber}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleGenerateNumber}
+                      disabled={busy}
+                    >
+                      Generate
+                    </Button>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Generate saves the next 4-digit number, starting at 1000, and uses it as the clock PIN.
+                    The employee enters that number to clock in or out without an NFC badge.
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Home location</p>
@@ -344,7 +414,8 @@ export default function EmployeeDetailPage() {
           </CardHeader>
           <CardContent>
             <p className="mb-3 text-sm text-muted-foreground">
-              4-digit PIN. It cannot start with 0, and it cannot match another employee.
+              4-digit code for clocking in or out without an NFC badge. It cannot start with 0.
+              Generating an employee number sets this PIN to that number. The clock also accepts the employee number itself.
             </p>
             {editingPin ? (
               <div className="flex flex-wrap items-center gap-2">

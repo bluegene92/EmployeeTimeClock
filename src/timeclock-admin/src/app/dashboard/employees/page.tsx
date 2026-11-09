@@ -11,8 +11,10 @@ import {
 } from "lucide-react";
 import type { Employee, Location, RateType } from "@/types/employee";
 import {
+  checkEmployeeNumber,
   createEmployee,
   deleteEmployee,
+  getNextEmployeeNumber,
   listEmployees,
   listLocations,
   updateEmployee,
@@ -101,7 +103,8 @@ export default function EmployeesPage() {
           e.firstName.toLowerCase().includes(q) ||
           e.lastName.toLowerCase().includes(q) ||
           e.email.toLowerCase().includes(q) ||
-          e.employeeNumber.toLowerCase().includes(q)
+          e.employeeNumber.toLowerCase().includes(q) ||
+          (e.pin ?? "").toLowerCase().includes(q)
       );
     }
     if (statusFilter === "active") result = result.filter((e) => e.isActive);
@@ -167,6 +170,7 @@ export default function EmployeesPage() {
     rateType?: RateType;
     hourlyRate?: number;
     salaryAmount?: number;
+    generateEmployeeNumber?: boolean;
   }) => {
     try {
       setBusy(true);
@@ -214,7 +218,7 @@ export default function EmployeesPage() {
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Employees</h1>
           <p className="mt-1 text-muted-foreground">
-            Manage employees, home locations, and clock PINs
+            Manage employees, home locations, and 4-digit clock numbers
           </p>
         </div>
         <Button onClick={() => setShowCreateModal(true)}>
@@ -233,7 +237,7 @@ export default function EmployeesPage() {
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search by name, email, or employee number..."
+            placeholder="Search by name, email, employee number, or clock number..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-10"
@@ -292,7 +296,7 @@ export default function EmployeesPage() {
                 <TableHead>Employee #</TableHead>
                 <TableHead>Location</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>PIN</TableHead>
+                <TableHead>Clock #</TableHead>
                 <TableHead>Hourly Rate</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-20" />
@@ -327,8 +331,8 @@ export default function EmployeesPage() {
                     {emp.locationName ?? "—"}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{emp.email}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {emp.hasPinSet ? "Set" : "—"}
+                  <TableCell className="font-mono text-muted-foreground">
+                    {emp.pin || "—"}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {emp.wageRate?.rateType === "Salary"
@@ -455,16 +459,50 @@ function CreateEmployeeModal({
     rateType?: RateType;
     hourlyRate?: number;
     salaryAmount?: number;
+    generateEmployeeNumber?: boolean;
   }) => void;
 }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [employeeNumber, setEmployeeNumber] = useState("");
+  const [generateEmployeeNumber, setGenerateEmployeeNumber] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [numberError, setNumberError] = useState<string | null>(null);
+
+  const handleCheckNumber = async () => {
+    const value = employeeNumber.trim();
+    if (!value || generateEmployeeNumber) {
+      setNumberError(null);
+      return;
+    }
+    try {
+      const result = await checkEmployeeNumber(value);
+      setNumberError(result.available ? null : result.message);
+    } catch (err) {
+      setNumberError(err instanceof Error ? err.message : "Could not check the employee number.");
+    }
+  };
   const [locationId, setLocationId] = useState("");
   const [rateType, setRateType] = useState<RateType>("Hourly");
   const [payAmount, setPayAmount] = useState("");
   const [isActive, setIsActive] = useState(true);
+
+  const handleGenerate = async () => {
+    try {
+      setGenerating(true);
+      setGenerateError(null);
+      const next = await getNextEmployeeNumber();
+      setEmployeeNumber(next.employeeNumber);
+      setGenerateEmployeeNumber(true);
+      setNumberError(null);
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "Could not generate a number.");
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -480,6 +518,7 @@ function CreateEmployeeModal({
       rateType,
       hourlyRate: rateType === "Hourly" ? amount : undefined,
       salaryAmount: rateType === "Salary" ? amount : undefined,
+      generateEmployeeNumber,
     });
   };
 
@@ -519,11 +558,37 @@ function CreateEmployeeModal({
           </div>
           <div className="space-y-2">
             <Label>Employee number</Label>
-            <Input
-              value={employeeNumber}
-              onChange={(e) => setEmployeeNumber(e.target.value)}
-              required
-            />
+            <div className="flex gap-2">
+              <Input
+                value={employeeNumber}
+                onChange={(e) => {
+                  setEmployeeNumber(e.target.value);
+                  setGenerateEmployeeNumber(false);
+                  setNumberError(null);
+                }}
+                onBlur={handleCheckNumber}
+                required={!generateEmployeeNumber}
+                placeholder={generateEmployeeNumber ? "1000" : "Type or generate"}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleGenerate}
+                disabled={busy || generating}
+              >
+                {generating ? "Generating..." : "Generate"}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Generate assigns the next 4-digit number, starting at 1000. The employee
+              can enter it to clock in or out without an NFC badge.
+            </p>
+            {generateError && (
+              <p className="text-xs text-destructive">{generateError}</p>
+            )}
+            {numberError && (
+              <p className="text-xs text-destructive">{numberError}</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label>Home location</Label>
@@ -578,7 +643,7 @@ function CreateEmployeeModal({
             <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
-            <Button type="submit" disabled={busy}>Create</Button>
+            <Button type="submit" disabled={busy || !!numberError}>Create</Button>
           </DialogFooter>
         </form>
       </DialogContent>

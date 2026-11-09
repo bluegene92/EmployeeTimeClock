@@ -67,6 +67,24 @@ export function getEmployee(id: string) {
   return request<Employee>(`/api/employees/${id}`);
 }
 
+export function getNextEmployeeNumber() {
+  return request<{ employeeNumber: string }>("/api/employees/next-number");
+}
+
+export function checkEmployeeNumber(number: string, excludeId?: string) {
+  const params = new URLSearchParams({ number });
+  if (excludeId) params.set("excludeId", excludeId);
+  return request<{ employeeNumber: string; available: boolean; message: string | null }>(
+    `/api/employees/employee-number/check?${params.toString()}`
+  );
+}
+
+export function generateEmployeeNumber(id: string) {
+  return request<Employee>(`/api/employees/${id}/employee-number`, {
+    method: "POST",
+  });
+}
+
 export function createEmployee(body: {
   firstName: string;
   lastName: string;
@@ -77,6 +95,7 @@ export function createEmployee(body: {
   rateType?: RateType;
   hourlyRate?: number;
   salaryAmount?: number;
+  generateEmployeeNumber?: boolean;
 }) {
   return request<Employee>("/api/employees", {
     method: "POST",
