@@ -141,7 +141,9 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors();
 app.UseMiddleware<AdminApiKeyMiddleware>();
+// Rewrite /api/test before route matching. Without this call, routing runs first and /api/test is a 404.
 app.UseMiddleware<TestDatabaseMiddleware>();
+app.UseRouting();
 app.UseAuthorization();
 app.MapControllers();
 
