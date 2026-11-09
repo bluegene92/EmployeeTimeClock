@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getPayPeriodSettings, updatePayPeriodSettings } from "@/lib/api";
+import { getAppEnvironment, setAppEnvironment, type AppEnvironment } from "@/lib/environment";
 import { getBiWeeklyDateRange, getCurrentPeriodIndex, parseDateOnly, toDateKey } from "@/lib/biWeeklyUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +21,11 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [environment, setEnvironment] = useState<AppEnvironment>("production");
+
+  useEffect(() => {
+    setEnvironment(getAppEnvironment());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +84,34 @@ export default function SettingsPage() {
           Bi-weekly pay periods are 14 days, counted from the start date you pick.
         </p>
       </div>
+
+      <Card className="mb-6 max-w-xl">
+        <CardHeader>
+          <CardTitle>Environment</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Production uses the live database. Test sends every request through the test API, which stores data in the test database.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={environment === "production" ? "default" : "outline"}
+              onClick={() => environment !== "production" && setAppEnvironment("production")}
+            >
+              Production
+            </Button>
+            <Button
+              type="button"
+              variant={environment === "test" ? "default" : "outline"}
+              className={environment === "test" ? "bg-amber-400 text-amber-950 hover:bg-amber-300" : ""}
+              onClick={() => environment !== "test" && setAppEnvironment("test")}
+            >
+              Test
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card className="max-w-xl">
         <CardHeader>

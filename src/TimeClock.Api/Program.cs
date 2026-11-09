@@ -92,6 +92,7 @@ builder.Services.AddCors(options =>
 
 SqlMapper.AddTypeHandler(new DateOnlyTypeHandler());
 
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IDbConnectionFactory, DbConnectionFactory>();
 builder.Services.AddScoped<IEmployeeRepository, EmployeeRepository>();
 builder.Services.AddScoped<ILocationRepository, LocationRepository>();
@@ -105,17 +106,31 @@ var app = builder.Build();
 if (!string.IsNullOrWhiteSpace(debugDatabase))
     app.Logger.LogInformation("Using Postgres database {Database} on {Host}.", debugDatabase, debugHost ?? "unknown host");
 
+var databases = app.Services.GetRequiredService<IDbConnectionFactory>();
 try
 {
-    await SchemaInitializer.ApplyAsync(
-        app.Services.GetRequiredService<IDbConnectionFactory>(),
-        app.Environment,
-        app.Logger);
+    await SchemaInitializer.ApplyAsync(databases, app.Environment, app.Logger);
 }
 catch (Exception ex)
 {
     app.Logger.LogError(ex, "Failed to apply database schema on startup.");
     throw;
+}
+
+if (!string.Equals(databases.ActiveDatabaseName, databases.TestDatabaseName, StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        await SchemaInitializer.ApplyAsync(
+            databases.CreateTestConnection,
+            app.Environment,
+            app.Logger,
+            databases.TestDatabaseName);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Failed to apply schema to test database {Database}.", databases.TestDatabaseName);
+    }
 }
 
 if (app.Environment.IsDevelopment())
@@ -126,6 +141,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors();
 app.UseMiddleware<AdminApiKeyMiddleware>();
+app.UseMiddleware<TestDatabaseMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 

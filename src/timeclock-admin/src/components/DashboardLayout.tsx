@@ -16,6 +16,7 @@ import {
 import { ThemeToggle } from "./ThemeToggle";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
+import { getAppEnvironment, type AppEnvironment } from "@/lib/environment";
 
 const NAV_ITEMS = [
   { href: "/dashboard/employees", label: "Employees", icon: Users },
@@ -34,8 +35,12 @@ export default function DashboardLayout({
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [environment, setEnvironment] = useState<AppEnvironment>("production");
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setEnvironment(getAppEnvironment());
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!mounted) return;
@@ -75,7 +80,14 @@ export default function DashboardLayout({
             <Clock className="h-4 w-4" />
           </div>
           {!sidebarCollapsed && (
-            <span className="font-semibold text-foreground">TimeClock</span>
+            <span className="font-semibold text-foreground">
+              TimeClock
+              {environment === "test" && (
+                <span className="ml-2 rounded bg-amber-400 px-1.5 py-0.5 text-xs font-semibold text-amber-950">
+                  TEST
+                </span>
+              )}
+            </span>
           )}
         </div>
         <nav className="flex-1 space-y-0.5 p-4">
@@ -136,6 +148,11 @@ export default function DashboardLayout({
 
       {/* Main area with top bar */}
       <div className="flex flex-1 flex-col overflow-hidden">
+        {environment === "test" && (
+          <div className="bg-amber-400 px-6 py-2 text-sm font-medium text-amber-950">
+            Test environment. Requests go to the test API and are stored in the test database.
+          </div>
+        )}
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-card px-6">
           <div className="h-6 w-6" />
           <ThemeToggle />

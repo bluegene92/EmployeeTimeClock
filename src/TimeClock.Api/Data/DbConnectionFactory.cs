@@ -3,21 +3,42 @@ using Npgsql;
 
 namespace TimeClock.Api.Data;
 
+public static class TestDatabaseRequest
+{
+    public const string ItemKey = "TimeClock.UseTestDatabase";
+}
+
 public class DbConnectionFactory : IDbConnectionFactory
 {
+    private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly string _connectionString;
+    private readonly string _testConnectionString;
 
-    public DbConnectionFactory(IConfiguration configuration)
+    public string ActiveDatabaseName { get; }
+    public string TestDatabaseName { get; }
+
+    public DbConnectionFactory(IConfiguration configuration, IHttpContextAccessor httpContextAccessor)
     {
+        _httpContextAccessor = httpContextAccessor;
         var conn = configuration["DATABASE_URL"]
             ?? configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("Connection string 'DATABASE_URL' or 'DefaultConnection' is not configured.");
+
+        var testDatabase = configuration["TEST_DATABASE"];
+        if (string.IsNullOrWhiteSpace(testDatabase))
+            testDatabase = configuration["DebugDatabases:Test"];
+        if (string.IsNullOrWhiteSpace(testDatabase))
+            testDatabase = "timeclock_test";
+
+        _testConnectionString = WithDatabase(conn, testDatabase.Trim());
 
         var selectedDatabase = configuration["DebugDatabaseOverride"];
         if (!string.IsNullOrWhiteSpace(selectedDatabase))
             conn = WithDatabase(conn, selectedDatabase.Trim());
 
         _connectionString = ToNpgsqlConnectionString(conn);
+        ActiveDatabaseName = DescribeDatabase(_connectionString);
+        TestDatabaseName = DescribeDatabase(_testConnectionString);
     }
 
     internal static string WithDatabase(string conn, string database)
@@ -46,7 +67,18 @@ public class DbConnectionFactory : IDbConnectionFactory
         }
     }
 
-    public IDbConnection CreateConnection() => new NpgsqlConnection(_connectionString);
+    public IDbConnection CreateConnection()
+    {
+        var useTest = _httpContextAccessor.HttpContext?.Items[TestDatabaseRequest.ItemKey] is true;
+        return new NpgsqlConnection(useTest ? _testConnectionString : _connectionString);
+    }
+
+    public IDbConnection CreateTestConnection() => new NpgsqlConnection(_testConnectionString);
+
+    private static string DescribeDatabase(string connectionString)
+    {
+        return TryDescribe(connectionString, out _, out var database) ? database : "";
+    }
 
     internal static string ToNpgsqlConnectionString(string conn)
     {

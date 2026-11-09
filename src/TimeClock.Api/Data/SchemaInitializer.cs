@@ -1,10 +1,14 @@
+using System.Data;
 using Dapper;
 
 namespace TimeClock.Api.Data;
 
 public static class SchemaInitializer
 {
-    public static async Task ApplyAsync(IDbConnectionFactory db, IHostEnvironment env, ILogger logger)
+    public static Task ApplyAsync(IDbConnectionFactory db, IHostEnvironment env, ILogger logger) =>
+        ApplyAsync(db.CreateConnection, env, logger, db.ActiveDatabaseName);
+
+    public static async Task ApplyAsync(Func<IDbConnection> createConnection, IHostEnvironment env, ILogger logger, string databaseName)
     {
         var directory = ResolveSchemaDirectory(env);
         if (directory is null)
@@ -20,13 +24,13 @@ public static class SchemaInitializer
             return;
         }
 
-        using var conn = db.CreateConnection();
+        using var conn = createConnection();
         conn.Open();
         foreach (var file in files)
         {
             var sql = await File.ReadAllTextAsync(file);
             await conn.ExecuteAsync(sql);
-            logger.LogInformation("Applied Postgres schema from {Path}.", file);
+            logger.LogInformation("Applied Postgres schema from {Path} to database {Database}.", file, databaseName);
         }
     }
 

@@ -8,6 +8,7 @@ import type {
 } from "@/types/employee";
 import type { PunchType, TimePunch } from "@/types/timePunch";
 import { toWallClockIso } from "@/lib/biWeeklyUtils";
+import { getAppEnvironment } from "@/lib/environment";
 
 function readError(text: string, status: number, statusText: string) {
   const trimmed = text.trim();
@@ -23,8 +24,15 @@ function readError(text: string, status: number, statusText: string) {
   return trimmed;
 }
 
+function toEnvironmentPath(path: string) {
+  if (getAppEnvironment() !== "test" || !path.startsWith("/api/") || path.startsWith("/api/test/") || path.startsWith("/api/test?")) {
+    return path;
+  }
+  return `/api/test${path.slice(4)}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api/backend${path}`, {
+  const res = await fetch(`/api/backend${toEnvironmentPath(path)}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
