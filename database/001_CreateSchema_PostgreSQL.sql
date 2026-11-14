@@ -130,3 +130,43 @@ CREATE TABLE IF NOT EXISTS "ClockFailures" (
 );
 CREATE INDEX IF NOT EXISTS "IX_ClockFailures_ReceivedAt" ON "ClockFailures" ("ReceivedAt" DESC);
 CREATE INDEX IF NOT EXISTS "IX_ClockFailures_Open" ON "ClockFailures" ("ReceivedAt" DESC) WHERE "ResolvedAt" IS NULL;
+
+-- One row per physical clock, updated by its check-in every few seconds.
+CREATE TABLE IF NOT EXISTS "ClockDevices" (
+    "DeviceId" VARCHAR(100) PRIMARY KEY,
+    "LocationId" UUID NULL,
+    "EmployeeListVersion" VARCHAR(64) NULL,
+    "PendingPunches" INT NOT NULL DEFAULT 0,
+    "PendingFailures" INT NOT NULL DEFAULT 0,
+    "FirmwareVersion" VARCHAR(50) NULL,
+    "FirstSeenAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "LastSeenAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE "ClockDevices" ADD COLUMN IF NOT EXISTS "BootedAt" TIMESTAMPTZ NULL;
+ALTER TABLE "ClockDevices" ADD COLUMN IF NOT EXISTS "WifiRssi" INT NULL;
+
+-- A gap between check-ins longer than the online window, or a restart.
+-- StartedAt is the last check-in before the gap, EndedAt the first one after it.
+CREATE TABLE IF NOT EXISTS "ClockDeviceOutages" (
+    "Id" BIGSERIAL PRIMARY KEY,
+    "DeviceId" VARCHAR(100) NOT NULL,
+    "StartedAt" TIMESTAMPTZ NOT NULL,
+    "EndedAt" TIMESTAMPTZ NOT NULL,
+    "Restarted" BOOLEAN NOT NULL DEFAULT false
+);
+
+CREATE INDEX IF NOT EXISTS "IX_ClockDeviceOutages_Device" ON "ClockDeviceOutages" ("DeviceId", "EndedAt" DESC);
+
+-- Bumped by an admin "push" so every clock downloads the employee list again,
+-- even when the list itself has not changed.
+CREATE TABLE IF NOT EXISTS "EmployeeListSync" (
+    "Id" INT PRIMARY KEY,
+    "Generation" BIGINT NOT NULL DEFAULT 0,
+    "PushedAt" TIMESTAMPTZ NULL,
+    CONSTRAINT "CK_EmployeeListSync_Singleton" CHECK ("Id" = 1)
+);
+
+INSERT INTO "EmployeeListSync" ("Id", "Generation")
+VALUES (1, 0)
+ON CONFLICT ("Id") DO NOTHING;

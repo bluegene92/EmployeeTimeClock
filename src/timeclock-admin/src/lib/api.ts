@@ -8,6 +8,7 @@ import type {
 } from "@/types/employee";
 import type { PunchType, TimePunch } from "@/types/timePunch";
 import type { ClockFailure } from "@/types/clockFailure";
+import type { ClockDevicesStatus, ClockOutage } from "@/types/clockDevice";
 import { toWallClockIso } from "@/lib/biWeeklyUtils";
 import { getAppEnvironment } from "@/lib/environment";
 
@@ -234,6 +235,22 @@ export function reopenClockFailure(id: string) {
 
 export function deleteClockFailure(id: string) {
   return request<void>(`/api/clock-failures/${id}`, { method: "DELETE" });
+}
+
+export function getClockStatus() {
+  return request<ClockDevicesStatus>("/api/devices");
+}
+
+export function pushEmployeeListToClocks() {
+  return request<ClockDevicesStatus>("/api/devices/push-employee-list", { method: "POST" });
+}
+
+export function getClockOutages(deviceId: string, days = 7) {
+  return request<ClockOutage[]>(`/api/devices/${encodeURIComponent(deviceId)}/outages?days=${days}`);
+}
+
+export function deleteClockDevice(deviceId: string) {
+  return request<void>(`/api/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
 }
 
 export function listResolvedDayRates(from: string, to: string) {

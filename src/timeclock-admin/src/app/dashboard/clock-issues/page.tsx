@@ -41,6 +41,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useClockPush } from "@/lib/clockPush";
+import { ClockPushStatus } from "@/components/ClockPushStatus";
 
 const REASON_LABELS: Record<string, string> = {
   UnknownCard: "Unknown card",
@@ -68,6 +70,7 @@ export default function ClockIssuesPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [assigning, setAssigning] = useState<ClockFailure | null>(null);
+  const clockPush = useClockPush();
 
   const load = useCallback(async (includeResolved: boolean) => {
     try {
@@ -123,6 +126,8 @@ export default function ClockIssuesPage() {
           {error}
         </p>
       )}
+
+      <ClockPushStatus state={clockPush.state} onDismiss={clockPush.dismiss} className="mb-4" />
 
       {!loading && (
         <p className="mb-3 text-sm text-muted-foreground">
@@ -258,6 +263,7 @@ export default function ClockIssuesPage() {
           onClose={() => setAssigning(null)}
           onAssigned={async () => {
             setAssigning(null);
+            clockPush.confirm();
             await load(showResolved);
           }}
         />
@@ -307,8 +313,8 @@ function AssignCardDialog({
         <DialogHeader>
           <DialogTitle>Assign card {failure.cardUid}</DialogTitle>
           <DialogDescription>
-            Replaces the employee&apos;s current card. Every open unknown-card issue for this card is marked resolved.
-            The clock picks up the change within about a minute of the next scan, or 15 minutes at most.
+            Replaces the employee&apos;s current card. Every open unknown-card issue for this card is marked resolved,
+            and the change is sent to every clock.
           </DialogDescription>
         </DialogHeader>
         {error && <p className="text-sm text-destructive">{error}</p>}

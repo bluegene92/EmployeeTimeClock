@@ -31,6 +31,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useClockPush } from "@/lib/clockPush";
+import { ClockPushStatus } from "@/components/ClockPushStatus";
 
 export default function EmployeeDetailPage() {
   const params = useParams();
@@ -60,6 +62,7 @@ export default function EmployeeDetailPage() {
 
   const [editingCard, setEditingCard] = useState(false);
   const [cardUid, setCardUid] = useState("");
+  const clockPush = useClockPush();
 
   const load = async () => {
     const [emp, locationData, wageHistory] = await Promise.all([
@@ -222,6 +225,7 @@ export default function EmployeeDetailPage() {
       setCardUid("");
       setEditingCard(false);
       setError(null);
+      clockPush.confirm();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save card.");
     } finally {
@@ -237,6 +241,7 @@ export default function EmployeeDetailPage() {
       await load();
       setEditingCard(false);
       setError(null);
+      clockPush.confirm();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to clear card.");
     } finally {
@@ -493,7 +498,9 @@ export default function EmployeeDetailPage() {
           <CardContent>
             <p className="mb-3 text-sm text-muted-foreground">
               The card ID the time clock reads. Scan an unassigned card at the clock and it shows the ID to enter here.
+              Saving sends the change to every clock.
             </p>
+            <ClockPushStatus state={clockPush.state} onDismiss={clockPush.dismiss} className="mb-3" />
             {editingCard ? (
               <div className="flex flex-wrap items-center gap-2">
                 <Input

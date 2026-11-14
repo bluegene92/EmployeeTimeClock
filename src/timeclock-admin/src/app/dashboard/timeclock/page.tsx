@@ -42,7 +42,7 @@ import {
 } from "@/lib/biWeeklyUtils";
 import type { Employee, Location, ResolvedDayRate } from "@/types/employee";
 import type { TimePunch } from "@/types/timePunch";
-import { ChevronDown, ChevronUp, Pencil } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function formatTime(iso: string): string {
@@ -57,22 +57,26 @@ function formatDate(d: Date): string {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-function calculateHoursForPunches(punches: TimePunch[]): number {
+/**
+ * A day counts only when its punches pair up in order: In, Out, In, Out, and so on.
+ * An odd count or two Ins in a row means a missed punch; those days count as 0 hours
+ * and are flagged until an admin fixes them.
+ */
+function calculateHoursForPunches(punches: TimePunch[]): { hours: number; needsReview: boolean } {
+  if (punches.length === 0) return { hours: 0, needsReview: false };
   const sorted = [...punches].sort(
     (a, b) => new Date(a.punchedAt).getTime() - new Date(b.punchedAt).getTime()
   );
+  if (sorted.length % 2 !== 0) return { hours: 0, needsReview: true };
+
   let totalMs = 0;
-  let lastIn: Date | null = null;
-  for (const p of sorted) {
-    const dt = new Date(p.punchedAt);
-    if (p.punchType === "In") {
-      lastIn = dt;
-    } else if (p.punchType === "Out" && lastIn) {
-      totalMs += dt.getTime() - lastIn.getTime();
-      lastIn = null;
+  for (let i = 0; i < sorted.length; i += 2) {
+    if (sorted[i].punchType !== "In" || sorted[i + 1].punchType !== "Out") {
+      return { hours: 0, needsReview: true };
     }
+    totalMs += new Date(sorted[i + 1].punchedAt).getTime() - new Date(sorted[i].punchedAt).getTime();
   }
-  return totalMs / (1000 * 60 * 60);
+  return { hours: totalMs / (1000 * 60 * 60), needsReview: false };
 }
 
 export default function TimeClockPage() {
@@ -85,6 +89,8 @@ export default function TimeClockPage() {
   const [punches, setPunches] = useState<TimePunch[]>([]);
   const [dayRates, setDayRates] = useState<ResolvedDayRate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingCell, setEditingCell] = useState<{
     employeeId: string;
@@ -139,6 +145,7 @@ export default function TimeClockPage() {
     setPunches(punchList);
     setLocations(locationList);
     setDayRates(rates);
+    setUpdatedAt(new Date());
   };
 
   useEffect(() => {
@@ -220,6 +227,19 @@ export default function TimeClockPage() {
     await loadData(range);
   };
 
+  const refresh = async () => {
+    if (!range || refreshing) return;
+    try {
+      setRefreshing(true);
+      await loadData(range);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh time clock data.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const toggleVerify = async (employeeId: string, verified: boolean) => {
     if (!range) return;
     try {
@@ -267,6 +287,21 @@ export default function TimeClockPage() {
           <Button variant="outline" size="sm" onClick={() => setSortAsc(!sortAsc)}>
             Employee {sortAsc ? <ChevronUp className="ml-1 h-4 w-4" /> : <ChevronDown className="ml-1 h-4 w-4" />}
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refresh}
+            disabled={!range || loading || refreshing}
+            title="Load the latest punches without reloading the page"
+          >
+            <RefreshCw className={cn("mr-1.5 h-4 w-4", refreshing && "animate-spin")} />
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </Button>
+          {updatedAt && (
+            <span className="text-xs text-muted-foreground">
+              Updated {updatedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+            </span>
+          )}
         </div>
       </div>
 
@@ -303,6 +338,7 @@ export default function TimeClockPage() {
                     const verified = rateByKey.get(periodKey)?.isVerified ?? false;
                     const isSalary = emp.wageRate?.rateType === "Salary" || rateByKey.get(periodKey)?.rateType === "Salary";
                     let totalHours = 0;
+                    let daysToReview = 0;
                     return (
                       <tr key={emp.id} className="group border-b border-border hover:bg-muted/20">
                         <td className="sticky left-0 z-10 border-r border-border bg-background px-3 py-2 font-medium">
@@ -335,13 +371,18 @@ export default function TimeClockPage() {
                         {range.dates.map((d) => {
                           const dateKey = toDateKey(d);
                           const dayPunches = grid.get(emp.id)?.get(dateKey) ?? [];
-                          const hours = calculateHoursForPunches(dayPunches);
+                          const { hours, needsReview } = calculateHoursForPunches(dayPunches);
                           totalHours += hours;
+                          if (needsReview) daysToReview++;
                           const dayRate = rateByKey.get(`${emp.id}|${dateKey}`);
                           return (
                             <td
                               key={dateKey}
-                              className="cursor-pointer border-r border-border px-2 py-1 align-top transition-colors last:border-r-0 hover:bg-muted/30"
+                              title={needsReview ? "Missing punch: the In and Out punches do not pair up. Not counted in hours until fixed." : undefined}
+                              className={cn(
+                                "cursor-pointer border-r border-border px-2 py-1 align-top transition-colors last:border-r-0 hover:bg-muted/30",
+                                needsReview && "bg-destructive/5"
+                              )}
                               onClick={() =>
                                 setEditingCell({
                                   employeeId: emp.id,
@@ -375,7 +416,11 @@ export default function TimeClockPage() {
                                     ))
                                   )}
                                 </div>
-                                {hours > 0 && <span className="text-[10px] text-muted-foreground">{hours.toFixed(1)}h</span>}
+                                {needsReview ? (
+                                  <span className="text-[10px] font-medium text-destructive">Missing punch</span>
+                                ) : (
+                                  hours > 0 && <span className="text-[10px] text-muted-foreground">{hours.toFixed(1)}h</span>
+                                )}
                                 {!isSalary && dayRate?.hourlyRate != null && (
                                   <span className="text-[10px] text-muted-foreground">${dayRate.hourlyRate.toFixed(2)}</span>
                                 )}
@@ -386,7 +431,14 @@ export default function TimeClockPage() {
                             </td>
                           );
                         })}
-                        <td className="bg-muted/20 px-2 py-2 text-center font-medium">{totalHours.toFixed(1)}h</td>
+                        <td className="bg-muted/20 px-2 py-2 text-center font-medium">
+                          {totalHours.toFixed(1)}h
+                          {daysToReview > 0 && (
+                            <div className="text-[10px] font-medium text-destructive">
+                              {daysToReview} {daysToReview === 1 ? "day" : "days"} not counted
+                            </div>
+                          )}
+                        </td>
                         <td className="bg-muted/20 px-2 py-2 text-center font-medium">
                           {isSalary
                             ? "Salary"
@@ -395,7 +447,7 @@ export default function TimeClockPage() {
                                 let rated = false;
                                 for (const d of range.dates) {
                                   const key = toDateKey(d);
-                                  const hours = calculateHoursForPunches(grid.get(emp.id)?.get(key) ?? []);
+                                  const { hours } = calculateHoursForPunches(grid.get(emp.id)?.get(key) ?? []);
                                   const rate = rateByKey.get(`${emp.id}|${key}`)?.hourlyRate;
                                   if (rate == null) continue;
                                   rated = true;

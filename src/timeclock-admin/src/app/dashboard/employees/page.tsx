@@ -8,7 +8,10 @@ import {
   Pencil,
   Trash2,
   UserCircle,
+  Send,
 } from "lucide-react";
+import { useClockPush } from "@/lib/clockPush";
+import { ClockPushStatus } from "@/components/ClockPushStatus";
 import type { Employee, Location, RateType } from "@/types/employee";
 import {
   checkEmployeeNumber,
@@ -58,6 +61,7 @@ export default function EmployeesPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const clockPush = useClockPush();
   const [showBulkEditModal, setShowBulkEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | "bulk" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -221,11 +225,19 @@ export default function EmployeesPage() {
             Manage employees, home locations, and 4-digit clock numbers
           </p>
         </div>
-        <Button onClick={() => setShowCreateModal(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Employee
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={clockPush.push} disabled={clockPush.state.phase === "sending"}>
+            <Send className="mr-2 h-4 w-4" />
+            Push to clocks
+          </Button>
+          <Button onClick={() => setShowCreateModal(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Employee
+          </Button>
+        </div>
       </div>
+
+      <ClockPushStatus state={clockPush.state} onDismiss={clockPush.dismiss} className="mb-4" />
 
       {error && (
         <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">

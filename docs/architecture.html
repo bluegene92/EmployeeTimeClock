@@ -95,7 +95,7 @@
   <rect x="30" y="55" width="180" height="120" rx="8" fill="#e0ecff" stroke="#1d4ed8"/>
   <text x="120" y="77" font-size="13" font-weight="700" text-anchor="middle">ESP32 time clock</text>
   <text x="120" y="96" font-size="10.5" text-anchor="middle">PN532 NFC reader, TFT screen,</text>
-  <text x="120" y="110" font-size="10.5" text-anchor="middle">Break / Day buttons</text>
+  <text x="120" y="110" font-size="10.5" text-anchor="middle">buzzer</text>
   <text x="120" y="130" font-size="10.5" text-anchor="middle" font-weight="600">LittleFS flash storage</text>
   <text x="120" y="144" font-size="9.5" text-anchor="middle">punches.jsonl, failures.jsonl,</text>
   <text x="120" y="157" font-size="9.5" text-anchor="middle">employees.json, state.json</text>
@@ -180,6 +180,9 @@
   <tr><td><code>FrozenDayRates</code></td><td>Day rates locked when a period is verified, so later wage changes do not alter verified pay.</td></tr>
   <tr><td><code>PayPeriodSettings</code></td><td>Single row: the anchor date that bi-weekly periods are counted from.</td></tr>
   <tr><td><code>ClockFailures</code></td><td>Scans that did not become a punch: unknown cards and punches the API rejected. Has <code>ResolvedAt</code> so admins can work through them. No foreign keys, because a failure may reference an employee that does not exist.</td></tr>
+  <tr><td><code>ClockDevices</code></td><td>One row per clock, keyed by <code>DeviceId</code>. Updated on every check-in: last seen time, the employee list version the clock has, queued punch and issue counts, firmware version, location, Wi-Fi signal, and boot time.</td></tr>
+  <tr><td><code>ClockDeviceOutages</code></td><td>Downtime log. A row is written when a check-in arrives more than a minute after the previous one, or after the clock restarted. <code>StartedAt</code> is the last heartbeat before the gap and <code>EndedAt</code> the first one after.</td></tr>
+  <tr><td><code>EmployeeListSync</code></td><td>Single row with a <code>Generation</code> counter. <b>Push employee list</b> increments it, which changes the list version every clock compares against.</td></tr>
 </table>
 
 <h3>3.4 Relationships</h3>
@@ -247,7 +250,8 @@
   <tr><td>Clock codes</td><td>4-digit PIN per employee. <code>POST /api/auth/verify-pin</code> accepts a PIN or an employee number, for clocking in without a badge.</td></tr>
   <tr><td>NFC cards</td><td>Assign or clear a card per employee. Card IDs are normalized to uppercase hex without separators and must be unique. Assigning a card resolves open unknown-card issues for it.</td></tr>
   <tr><td>Punches</td><td>Single create, edit, and delete for admins. Batch <code>POST /api/timepunches/sync</code> for clocks: skips IDs it already has, and logs any rejected punch to <code>ClockFailures</code>.</td></tr>
-  <tr><td>Clock sync</td><td><code>GET /api/sync/employees</code> returns active employees with card ID and home location for the clock's local cache.</td></tr>
+  <tr><td>Clock sync</td><td><code>GET /api/sync/employees</code> returns active employees with card ID and home location for the clock's local cache, plus the list <code>version</code>.</td></tr>
+  <tr><td>Clock devices</td><td>Clocks check in every 15 seconds (<code>POST /api/devices/check-in</code>) and get back the current employee list version. The version is a fingerprint of the push generation and every active employee's ID, name, card, and location, so any card change alters it automatically. Admins list clocks and push the list (see 8.5).</td></tr>
   <tr><td>Clock failures</td><td>Clocks report unknown cards. Admins list, resolve, reopen, and delete issues.</td></tr>
   <tr><td>Pay</td><td>Wage history, per-day rate overrides, pay-period settings, verify and unverify (freezes day rates).</td></tr>
 </table>
@@ -260,7 +264,8 @@
   <tr><th style="width:22%">Page</th><th>Purpose</th></tr>
   <tr><td>Employees</td><td>List, search, filter, bulk actions, add employee (with Generate employee number). Detail page: profile, PIN or clock code, NFC card, wage and history.</td></tr>
   <tr><td>Locations</td><td>Add, rename, deactivate, delete stores.</td></tr>
-  <tr><td>Time Clock</td><td>Bi-weekly grid of punches per employee. Add, edit, delete punches. Day rate edits. Verify and unverify a period.</td></tr>
+  <tr><td>Time Clock</td><td>Bi-weekly grid of punches per employee. Add, edit, delete punches. Day rate edits. Verify and unverify a period. Hours count only on days whose punches pair up as In, Out, In, Out. A day with an odd number of punches (a forgotten punch) shows <b>Missing punch</b>, counts 0 hours, and the total column says how many days are not counted until the admin fixes them.</td></tr>
+  <tr><td>Clocks</td><td>Monitoring for every clock: online or offline from its heartbeat, time since the last heartbeat (or how long it has been offline), Wi-Fi signal, time running since the last restart, downtime in the last 24 hours and 7 days, and an outage history. Also whether its employee list is current, punches and issues waiting to upload, and firmware. <b>Push employee list</b> button with live confirmation. Refreshes every 5 seconds.</td></tr>
   <tr><td>Clock Issues</td><td>Failed scans from the clocks. Assign an unknown card to an employee, mark resolved, reopen, delete.</td></tr>
   <tr><td>Reports</td><td>Placeholder.</td></tr>
   <tr><td>Settings</td><td>Production or Test environment switch, and the pay-period start date.</td></tr>
@@ -285,9 +290,7 @@
   <tr><th style="width:28%">Part</th><th>Connection</th></tr>
   <tr><td>ST7789 TFT display (240x320)</td><td>SPI: CS 5, DC 27, RST 33</td></tr>
   <tr><td>PN532 NFC reader</td><td>I2C: SDA 21, SCL 22, RST 25</td></tr>
-  <tr><td>Break button</td><td>GPIO 26 to ground (internal pull-up)</td></tr>
-  <tr><td>End-of-day button</td><td>GPIO 32 to ground (internal pull-up)</td></tr>
-  <tr><td>Buzzer</td><td>GPIO 13</td></tr>
+  <tr><td>Buzzer (active)</td><td>GPIO 13. One short beep: punch recorded. Three quick beeps: unknown card, same card scanned again within a minute, clock not set, or save failed. Beeps play in the background so the reader is never paused.</td></tr>
 </table>
 
 <h3>6.2 Files on flash (LittleFS)</h3>
@@ -295,8 +298,8 @@
   <tr><th style="width:22%">File</th><th>Contents</th><th style="width:28%">Lifecycle</th></tr>
   <tr><td><code>/punches.jsonl</code></td><td>Upload queue. One punch per line, already in the exact format the API expects.</td><td>Appended on each punch. A line is removed only after the API accepts it (or rejects it as invalid).</td></tr>
   <tr><td><code>/failures.jsonl</code></td><td>Unknown-card scans waiting to be reported.</td><td>Appended on each unknown card. Removed after upload.</td></tr>
-  <tr><td><code>/employees.json</code></td><td>Cached employee list: ID, name, card ID, home location. Only employees with a card.</td><td>Replaced on each successful download (written to a temp file, then renamed).</td></tr>
-  <tr><td><code>/state.json</code></td><td>Each employee's status today: <code>IN</code>, <code>BREAK</code>, or <code>OUT</code>.</td><td>Updated on each punch. Entries from earlier days are ignored and pruned.</td></tr>
+  <tr><td><code>/employees.json</code></td><td>Cached employee list: ID, name, card ID, home location, and the list version. Only employees with a card.</td><td>Replaced on each successful download (written to a temp file, then renamed).</td></tr>
+  <tr><td><code>/state.json</code></td><td>Each employee's status today: <code>IN</code> or <code>OUT</code>. Loaded into memory at startup together with <code>/employees.json</code>, so a scan never reads flash.</td><td>Updated on each punch. Entries from earlier days are ignored and pruned.</td></tr>
 </table>
 <p>A queued punch line looks like this:</p>
 <pre>{"id":"3f2a9c1e-8b7d-4e21-9a55-0c4d2b1e7f60","employeeId":"03c85ba3-649c-4268-bdf4-5294a54476a6",
@@ -310,43 +313,49 @@
 
 <h3>6.3 What a scan does</h3>
 <div class="figure">
-<svg viewBox="0 0 760 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 760 412" width="100%" xmlns="http://www.w3.org/2000/svg">
   <defs><marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker></defs>
   <g font-size="10.5">
     <rect x="290" y="8" width="180" height="32" rx="16" fill="#e0ecff" stroke="#1d4ed8"/><text x="380" y="29" text-anchor="middle" font-weight="600">Card tapped</text>
-    <polygon points="380,58 480,88 380,118 280,88" fill="#fff" stroke="#334155"/><text x="380" y="85" text-anchor="middle">Card in cached</text><text x="380" y="98" text-anchor="middle">employee list?</text>
-    <rect x="20" y="70" width="210" height="62" rx="6" fill="#fdecec" stroke="#b91c1c"/><text x="125" y="90" text-anchor="middle" font-weight="600">UNKNOWN CARD + card ID</text><text x="125" y="105" text-anchor="middle">Queue report to failures.jsonl</text><text x="125" y="120" text-anchor="middle">Refresh employee list soon</text>
-    <polygon points="380,140 480,170 380,200 280,170" fill="#fff" stroke="#334155"/><text x="380" y="167" text-anchor="middle">Clock time set</text><text x="380" y="180" text-anchor="middle">by NTP?</text>
-    <rect x="20" y="152" width="210" height="36" rx="6" fill="#fdecec" stroke="#b91c1c"/><text x="125" y="175" text-anchor="middle" font-weight="600">CLOCK NOT SET (no punch)</text>
-    <polygon points="380,222 480,252 380,282 280,252" fill="#fff" stroke="#334155"/><text x="380" y="249" text-anchor="middle">Today's state</text><text x="380" y="262" text-anchor="middle">is IN?</text>
-    <rect x="530" y="140" width="220" height="80" rx="6" fill="#fff7e6" stroke="#b45309"/><text x="640" y="160" text-anchor="middle" font-weight="600">Show name + choice (15 s)</text><text x="640" y="177" text-anchor="middle">Break button: Out, state BREAK</text><text x="640" y="193" text-anchor="middle">Day button: Out, state OUT</text><text x="640" y="209" text-anchor="middle">No press: CANCELLED</text>
-    <rect x="530" y="246" width="220" height="62" rx="6" fill="#e7f6ef" stroke="#047857"/><text x="640" y="266" text-anchor="middle" font-weight="600">Punch In, state IN</text><text x="640" y="282" text-anchor="middle">Screen: CLOCKED IN or BREAK ENDED</text><text x="640" y="298" text-anchor="middle">with the employee's name</text>
-    <rect x="250" y="298" width="260" height="28" rx="6" fill="#f1f4f8" stroke="#64748b"/><text x="380" y="317" text-anchor="middle">Every punch: append to punches.jsonl first</text>
+    <polygon points="380,58 480,88 380,118 280,88" fill="#fff" stroke="#334155"/><text x="380" y="85" text-anchor="middle">Card in employee</text><text x="380" y="98" text-anchor="middle">list (memory)?</text>
+    <rect x="20" y="62" width="210" height="62" rx="6" fill="#fdecec" stroke="#b91c1c"/><text x="125" y="82" text-anchor="middle" font-weight="600">UNKNOWN CARD + card ID</text><text x="125" y="97" text-anchor="middle">Report to failures.jsonl (once a minute)</text><text x="125" y="112" text-anchor="middle">Three beeps, check in now</text>
+    <polygon points="380,140 480,170 380,200 280,170" fill="#fff" stroke="#334155"/><text x="380" y="167" text-anchor="middle">Same card punched</text><text x="380" y="180" text-anchor="middle">in the last minute?</text>
+    <rect x="20" y="146" width="210" height="48" rx="6" fill="#fff7e6" stroke="#b45309"/><text x="125" y="166" text-anchor="middle" font-weight="600">ALREADY SCANNED, wait Ns</text><text x="125" y="182" text-anchor="middle">Nothing recorded. Three beeps</text>
+    <polygon points="380,222 480,252 380,282 280,252" fill="#fff" stroke="#334155"/><text x="380" y="249" text-anchor="middle">Clock time set</text><text x="380" y="262" text-anchor="middle">by NTP?</text>
+    <rect x="20" y="234" width="210" height="36" rx="6" fill="#fdecec" stroke="#b91c1c"/><text x="125" y="257" text-anchor="middle" font-weight="600">CLOCK NOT SET. Three beeps</text>
+    <polygon points="380,304 480,334 380,364 280,334" fill="#fff" stroke="#334155"/><text x="380" y="331" text-anchor="middle">Clocked in</text><text x="380" y="344" text-anchor="middle">today?</text>
+    <rect x="530" y="268" width="220" height="48" rx="6" fill="#e7f6ef" stroke="#047857"/><text x="640" y="288" text-anchor="middle" font-weight="600">Punch Out, state OUT</text><text x="640" y="304" text-anchor="middle">CLOCKED OUT + name, one beep</text>
+    <rect x="530" y="340" width="220" height="48" rx="6" fill="#e7f6ef" stroke="#047857"/><text x="640" y="360" text-anchor="middle" font-weight="600">Punch In, state IN</text><text x="640" y="376" text-anchor="middle">CLOCKED IN + name, one beep</text>
+    <rect x="20" y="370" width="300" height="34" rx="6" fill="#f1f4f8" stroke="#64748b"/><text x="170" y="385" text-anchor="middle">Every punch: append to punches.jsonl first,</text><text x="170" y="398" text-anchor="middle">then start the 1-minute lockout for that card</text>
   </g>
   <g stroke="#334155" stroke-width="1.4" fill="none">
     <line x1="380" y1="40" x2="380" y2="56" marker-end="url(#c)"/>
-    <line x1="280" y1="88" x2="234" y2="98" marker-end="url(#c)"/>
+    <line x1="280" y1="88" x2="234" y2="92" marker-end="url(#c)"/>
     <line x1="380" y1="118" x2="380" y2="138" marker-end="url(#c)"/>
     <line x1="280" y1="170" x2="234" y2="170" marker-end="url(#c)"/>
     <line x1="380" y1="200" x2="380" y2="220" marker-end="url(#c)"/>
-    <path d="M480 252 L505 252 L505 180 L527 180" marker-end="url(#c)"/>
-    <line x1="480" y1="262" x2="527" y2="272" marker-end="url(#c)"/>
+    <line x1="280" y1="252" x2="234" y2="252" marker-end="url(#c)"/>
+    <line x1="380" y1="282" x2="380" y2="302" marker-end="url(#c)"/>
+    <path d="M480 334 L505 334 L505 292 L527 292" marker-end="url(#c)"/>
+    <path d="M462 340 L505 364 L527 364" marker-end="url(#c)"/>
   </g>
   <g font-size="9.5" fill="#475569">
     <text x="245" y="84">no</text><text x="388" y="132">yes</text>
-    <text x="245" y="164">no</text><text x="388" y="214">yes</text>
-    <text x="486" y="246">yes</text><text x="486" y="276">no</text>
+    <text x="245" y="164">yes</text><text x="388" y="214">no</text>
+    <text x="245" y="246">no</text><text x="388" y="296">yes</text>
+    <text x="486" y="328">yes</text><text x="486" y="364">no</text>
   </g>
 </svg>
-<div class="cap">Figure 3. Scan handling on the clock. No step waits for the network.</div>
+<div class="cap">Figure 3. Scan handling on the clock. Each scan flips In and Out. No step waits for the network.</div>
 </div>
 
 <h3>6.4 Background work</h3>
-<p>Network work runs only while the clock is idle (not showing a message and not waiting for the Break or Day choice), so it never slows a scan.</p>
+<p>All network work runs in a separate FreeRTOS task on the ESP32's second core. Scans run on the first core and never wait for the network. A mutex guards every flash file access shared by the two.</p>
 <table>
   <tr><th style="width:30%">Task</th><th>When</th></tr>
-  <tr><td>Upload punches, then failures</td><td>Every 30 seconds, and 3 seconds after a new punch or failure. Up to 20 lines per request.</td></tr>
-  <tr><td>Download employee list</td><td>At startup, every 15 minutes, and about 1 minute after an unknown card (at most once a minute).</td></tr>
+  <tr><td>Upload punches, then failures</td><td>Right after a new punch or failure, and every 30 seconds. Up to 20 lines per request.</td></tr>
+  <tr><td>Check in</td><td>Every 15 seconds, and right after an unknown card. Sends device ID, list version, queue counts, firmware version, and location.</td></tr>
+  <tr><td>Download employee list</td><td>At startup, whenever a check-in returns a different version, and every 15 minutes as a fallback. After a download the clock checks in again, which confirms the update to the admin app.</td></tr>
   <tr><td>Set clock time</td><td>SNTP from <code>pool.ntp.org</code> and <code>time.nist.gov</code>, time zone <code>CST6CDT</code> (US Central with daylight saving). Keeps retrying in the background.</td></tr>
   <tr><td>Wi-Fi</td><td>WiFiManager. On first boot, or if the saved network fails, the clock opens a setup hotspot <code>TimeClock-Setup</code> for 3 minutes. Auto-reconnect is on.</td></tr>
 </table>
@@ -430,15 +439,24 @@
   <li>The employee taps a new card. The clock shows <b>UNKNOWN CARD</b> and the card ID, and queues a report.</li>
   <li>The report reaches the API. If the card already belongs to someone (assigned after the clock's last list download), the issue names that employee. Otherwise it says the card is not assigned.</li>
   <li>The admin opens <b>Clock Issues</b>, clicks the card button, and picks the employee. The card is saved and all open unknown-card issues for it are resolved.</li>
-  <li>About a minute after the unknown card, the clock downloads the employee list again. The next tap works.</li>
+  <li>The card change alters the employee list version. Each clock sees that at its next check-in (within 15 seconds), downloads the list, and confirms. The admin app shows which clocks confirmed. The next tap works.</li>
 </ol>
-<p>The admin can also type the card ID on the employee's page under <b>NFC Card</b>.</p>
+<p>The admin can also type the card ID on the employee's page under <b>NFC Card</b>; saving or clearing it reports clock confirmation the same way.</p>
 
 <h3>8.3 Clocking in without a badge</h3>
 <p>An employee who forgot the badge can use a 4-digit clock code. The admin generates it on the employee's page (next free number from 1000, used as both employee number and PIN). <code>POST /api/auth/verify-pin</code> accepts the PIN or the employee number. The ESP32 build documented here has no keypad, so this path is for a PIN-capable clock app or for the admin adding the punch by hand.</p>
 
 <h3>8.4 Admin corrections</h3>
 <p>The admin adds, edits, or deletes punches on the Time Clock grid. These go through the same API with <code>Source = "Web"</code>. The clock does not learn about these edits (see section 13).</p>
+
+<h3>8.5 Pushing the employee list to clocks</h3>
+<p>The API cannot open a connection to a clock, because clocks sit behind store routers. Instead, clocks poll often and the admin app waits for their acknowledgment:</p>
+<ol>
+  <li>The admin clicks <b>Push employee list</b> (Clocks or Employees page), or saves a card change. Push calls <code>POST /api/devices/push-employee-list</code>, which increments <code>EmployeeListSync.Generation</code>. A card change alters the version by itself.</li>
+  <li>Each clock's next check-in (within 15 seconds) returns the new version. The clock downloads <code>/api/sync/employees</code> and checks in again with the new version.</li>
+  <li>The admin app polls <code>GET /api/devices</code> every 3 seconds for up to a minute and shows progress ("2 of 3 confirmed").</li>
+  <li>Result: green when every clock confirmed. Red, naming each clock, when a clock is offline (no check-in in the last minute, with its last-seen time) or online but did not confirm within a minute. Offline clocks still update by themselves when they reconnect.</li>
+</ol>
 
 <!-- ============================== 9 ============================== -->
 <h2 class="page-break">9. Offline operation and recovery</h2>
@@ -453,7 +471,7 @@
 
 <h3>9.2 What still works offline</h3>
 <ul>
-  <li>Card lookup, names on screen, and the In or Break/Day decision all use files on the clock.</li>
+  <li>Card lookup, names on screen, and the In or Out decision all use data on the clock.</li>
   <li>The clock keeps time with its internal clock once NTP has set it. It needs the network only once after power-up to learn the time.</li>
   <li>New cards assigned in the admin app are not known until the clock can download the list again.</li>
 </ul>
@@ -471,7 +489,7 @@
   <tr><td>One punch in a batch is invalid (for example, employee deleted)</td><td>Batch gets 400. Clock resends one punch at a time. Valid ones are stored. The invalid one is logged to Clock Issues by the API and dropped from the clock.</td><td><span class="tag t-warn">Logged for review</span></td></tr>
   <tr><td>Power loss</td><td>Queue and state files survive on flash. Upload resumes after boot.</td><td><span class="tag t-ok">No</span> (see 13 for a small edge case)</td></tr>
   <tr><td>Clock booted without Wi-Fi, time never set</td><td>Shows <b>CLOCK NOT SET</b> and records nothing until NTP succeeds. Unknown-card reports are still queued, without a scan time.</td><td><span class="tag t-bad">Scan not recorded</span></td></tr>
-  <tr><td>Card assigned in the admin app while offline</td><td>Clock still shows UNKNOWN CARD until it can download the list. Each attempt is reported to Clock Issues.</td><td><span class="tag t-warn">Logged for review</span></td></tr>
+  <tr><td>Card assigned in the admin app while offline</td><td>The admin app reports the clock as not reached. The clock still shows UNKNOWN CARD until its first check-in after reconnecting. Each attempt is reported to Clock Issues.</td><td><span class="tag t-warn">Logged for review</span></td></tr>
 </table>
 
 <!-- ============================== 10 ============================== -->
@@ -515,7 +533,7 @@
 <ul>
   <li><b>Punch times are local wall-clock times</b> with no time zone, for example <code>2026-11-14T08:30:00</code>, stored in a <code>TIMESTAMP</code> (without time zone) column. The API marks incoming values as "unspecified" so .NET never shifts them.</li>
   <li>The ESP32 converts NTP time to US Central (<code>CST6CDT,M3.2.0/2</code>, which handles daylight saving) before formatting. A clock installed in another time zone needs that string changed.</li>
-  <li><b>Shifts never cross midnight.</b> Each punch belongs to one calendar day, and the clock resets each employee's state at midnight. A late shift that ends after midnight must be split or corrected by the admin.</li>
+  <li><b>Shifts never cross midnight.</b> Each punch belongs to one calendar day, and the clock resets each employee's state at midnight. A late shift that ends after midnight must be split or corrected by the admin. A forgotten clock-out leaves that day with an odd number of punches, which the Time Clock grid flags as <b>Missing punch</b>; the next day starts with an In as usual.</li>
   <li>Audit columns (<code>CreatedAt</code>, <code>ReceivedAt</code>, <code>ResolvedAt</code>) are true timestamps in UTC (<code>TIMESTAMPTZ</code>).</li>
   <li>Pay periods are 14 days, counted from the anchor date on the Settings page.</li>
 </ul>
@@ -534,6 +552,7 @@
 <h3>12.2 Where to look</h3>
 <table>
   <tr><th style="width:26%">Signal</th><th>Meaning</th></tr>
+  <tr><td>Admin app, Clocks</td><td>Which clocks are online, whether their list is current, and how many punches are waiting to upload.</td></tr>
   <tr><td>Admin app, Clock Issues</td><td>Unknown cards and rejected punches. Review daily.</td></tr>
   <tr><td><code>GET /api/health</code></td><td>API is up. No key needed.</td></tr>
   <tr><td>Render logs</td><td>Startup schema application, unhandled errors, and a startup error if <code>ADMIN_API_KEY</code> is missing.</td></tr>
@@ -555,7 +574,8 @@
 <h3>13.1 Behavior limits</h3>
 <ul>
   <li><b>In/Out state is per clock.</b> Each clock decides In or Out from its own <code>state.json</code>. An employee who clocks in on one clock and out on another is recorded as In twice. Admin punch edits also do not reach the clock. A fix is to include each employee's last punch of the day in the sync download.</li>
-  <li><b>Up to 15 minutes to learn about changes</b> other than new cards (deactivations, name changes, removed cards). Unknown cards trigger a refresh within about a minute.</li>
+  <li><b>About 15 seconds to learn about changes.</b> Card, name, location, and active-status changes reach online clocks at their next check-in. Push is not instant, because it depends on the clock polling.</li>
+  <li><b>The beep reflects the clock, not the server.</b> A punch the API rejects during a later upload already beeped as a success; it appears under Clock Issues.</li>
   <li><b>No punch without NTP time</b> after a power cut with no Wi-Fi. A battery-backed real-time clock module would remove this limit.</li>
   <li><b>Queue rewrite window.</b> After an upload the clock rewrites the queue file by writing a temp file, deleting the original, and renaming. Power loss in the instant between delete and rename would leave the remaining punches in <code>/queue.tmp</code>. Recovering that file at boot would close the gap.</li>
   <li><b>No keypad on the ESP32</b>, so badge-free clocking with a PIN requires another clock app or an admin-entered punch.</li>
@@ -602,6 +622,11 @@
   <tr><td>POST</td><td><code>/api/clock-failures/sync</code></td><td>Batch upload of clock-reported failures (max 100); idempotent</td></tr>
   <tr><td>POST</td><td><code>/api/clock-failures/{id}/resolve</code>, <code>/reopen</code></td><td>Mark resolved or open</td></tr>
   <tr><td>DELETE</td><td><code>/api/clock-failures/{id}</code></td><td>Delete an issue</td></tr>
+  <tr><td>POST</td><td><code>/api/devices/check-in</code></td><td>Clock heartbeat; returns the current employee list version</td></tr>
+  <tr><td>GET</td><td><code>/api/devices</code></td><td>All clocks with online, downtime, and up-to-date status</td></tr>
+  <tr><td>GET</td><td><code>/api/devices/{deviceId}/outages</code></td><td>Downtime history (<code>days</code>, 1 to 90)</td></tr>
+  <tr><td>POST</td><td><code>/api/devices/push-employee-list</code></td><td>New list version for every clock; returns status</td></tr>
+  <tr><td>DELETE</td><td><code>/api/devices/{deviceId}</code></td><td>Remove a clock from the list</td></tr>
   <tr><td>GET / PUT</td><td><code>/api/day-rates</code></td><td>Resolved day rates for a range; set a day override</td></tr>
   <tr><td>GET / PUT</td><td><code>/api/pay-periods/settings</code></td><td>Pay-period anchor date</td></tr>
   <tr><td>POST</td><td><code>/api/pay-periods/verify</code>, <code>/unverify</code></td><td>Lock or unlock an employee's day rates for a period</td></tr>
