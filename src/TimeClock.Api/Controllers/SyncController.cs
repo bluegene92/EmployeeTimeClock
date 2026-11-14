@@ -24,6 +24,7 @@ public class SyncController : ControllerBase
             emp.LastName,
             emp.EmployeeNumber,
             emp.HasPinSet,
+            emp.CardUid,
             emp.LocationId,
             emp.LocationName
         )).ToList();
@@ -37,6 +38,7 @@ public record EmployeeSyncDto(
     string LastName,
     string EmployeeNumber,
     bool HasPinSet,
+    string? CardUid,
     Guid? LocationId,
     string? LocationName);
 

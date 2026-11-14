@@ -103,8 +103,9 @@ public class TimePunchRepository : ITimePunchRepository
                 VALUES (
                     @Id, @EmployeeId, @LocationId, @PunchType, @PunchedAt, @Source, @DeviceId
                 )
+                ON CONFLICT ("Id") DO NOTHING
                 """;
-            await conn.ExecuteAsync(new CommandDefinition(sql, new
+            count += await conn.ExecuteAsync(new CommandDefinition(sql, new
             {
                 Id = id,
                 punch.EmployeeId,
@@ -114,7 +115,6 @@ public class TimePunchRepository : ITimePunchRepository
                 Source = string.IsNullOrWhiteSpace(punch.Source) ? "Desktop" : punch.Source,
                 punch.DeviceId
             }, transaction: tx, cancellationToken: ct));
-            count++;
         }
         tx.Commit();
         return count;

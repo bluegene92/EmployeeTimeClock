@@ -12,6 +12,7 @@ public class Employee
     public DateTime? DeletedAt { get; set; }
     public string? Pin { get; set; }
     public bool HasPinSet => !string.IsNullOrEmpty(Pin);
+    public string? CardUid { get; set; }
     public Guid? LocationId { get; set; }
     public string? LocationName { get; set; }
     public DateTime CreatedAt { get; set; }

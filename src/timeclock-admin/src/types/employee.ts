@@ -8,6 +8,7 @@ export interface Employee {
   isDeleted?: boolean;
   pin?: string | null;
   hasPinSet?: boolean;
+  cardUid?: string | null;
   locationId?: string | null;
   locationName?: string | null;
   wageRate?: WageRate;

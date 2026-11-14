@@ -135,6 +135,17 @@ export function clearEmployeePin(id: string) {
   return request<void>(`/api/employees/${id}/pin`, { method: "DELETE" });
 }
 
+export function setEmployeeCard(id: string, cardUid: string) {
+  return request<void>(`/api/employees/${id}/card`, {
+    method: "PUT",
+    body: JSON.stringify({ cardUid }),
+  });
+}
+
+export function clearEmployeeCard(id: string) {
+  return request<void>(`/api/employees/${id}/card`, { method: "DELETE" });
+}
+
 export function setEmployeeWage(
   id: string,
   body: { rateType: RateType; hourlyRate?: number; salaryAmount?: number }

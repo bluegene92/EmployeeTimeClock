@@ -19,6 +19,7 @@ public class EmployeeRepository : IEmployeeRepository
             e."IsDeleted",
             e."DeletedAt",
             e."Pin",
+            e."CardUid",
             e."LocationId",
             l."Name" AS "LocationName",
             e."CreatedAt",
@@ -327,6 +328,74 @@ public class EmployeeRepository : IEmployeeRepository
         {
             return PinUpdateResult.Fail("That PIN is already assigned to another employee.");
         }
+    }
+
+    public async Task<PinUpdateResult> SetCardAsync(Guid id, string cardUid, CancellationToken ct = default)
+    {
+        var uid = NormalizeCardUid(cardUid);
+        if (uid is null)
+            return PinUpdateResult.Fail("Card ID must be 8 to 20 hex characters, for example 04A1B2C3.");
+
+        var employee = await GetByIdAsync(id, ct);
+        if (employee is null || employee.IsDeleted)
+            return PinUpdateResult.Fail("Employee not found.");
+
+        var sql = """
+            UPDATE "Employees"
+            SET "CardUid" = @CardUid, "UpdatedAt" = @UpdatedAt
+            WHERE "Id" = @Id AND "IsDeleted" = false
+            """;
+        try
+        {
+            using var conn = _db.CreateConnection();
+            var owner = await conn.QueryFirstOrDefaultAsync<Employee>(new CommandDefinition(
+                SelectSql + """ WHERE e."CardUid" = @CardUid AND e."IsDeleted" = false AND e."Id" <> @Id LIMIT 1""",
+                new { CardUid = uid, Id = id },
+                cancellationToken: ct));
+            if (owner is not null)
+                return PinUpdateResult.Fail($"That card is already assigned to {owner.FirstName} {owner.LastName}.");
+
+            var rows = await conn.ExecuteAsync(new CommandDefinition(sql, new
+            {
+                Id = id,
+                CardUid = uid,
+                UpdatedAt = DateTime.UtcNow
+            }, cancellationToken: ct));
+            return rows > 0 ? PinUpdateResult.Ok() : PinUpdateResult.Fail("Employee not found.");
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            return PinUpdateResult.Fail("That card is already assigned to another employee.");
+        }
+    }
+
+    public async Task<bool> ClearCardAsync(Guid id, CancellationToken ct = default)
+    {
+        var sql = """
+            UPDATE "Employees"
+            SET "CardUid" = NULL, "UpdatedAt" = @UpdatedAt
+            WHERE "Id" = @Id AND "IsDeleted" = false
+            """;
+        using var conn = _db.CreateConnection();
+        var rows = await conn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            Id = id,
+            UpdatedAt = DateTime.UtcNow
+        }, cancellationToken: ct));
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// Uppercase hex with spaces, colons, and dashes removed. PN532 UIDs are 4, 7, or 10 bytes.
+    /// </summary>
+    public static string? NormalizeCardUid(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        var uid = new string(value.Where(c => c is not (' ' or ':' or '-')).ToArray()).ToUpperInvariant();
+        if (uid.Length < 8 || uid.Length > 20 || uid.Length % 2 != 0 || !uid.All(Uri.IsHexDigit))
+            return null;
+        return uid;
     }
 
     public async Task<bool> ClearPinAsync(Guid id, CancellationToken ct = default)

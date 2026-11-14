@@ -3,15 +3,17 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ChevronLeft, ChevronRight, Clock, DollarSign } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, CreditCard, DollarSign } from "lucide-react";
 import type { Employee, Location, RateType, WageRate } from "@/types/employee";
 import {
   checkEmployeeNumber,
+  clearEmployeeCard,
   clearEmployeePin,
   generateEmployeeNumber,
   getEmployee,
   listLocations,
   listWageHistory,
+  setEmployeeCard,
   setEmployeePin,
   setEmployeeWage,
   updateEmployee,
@@ -55,6 +57,9 @@ export default function EmployeeDetailPage() {
 
   const [editingPin, setEditingPin] = useState(false);
   const [pin, setPin] = useState("");
+
+  const [editingCard, setEditingCard] = useState(false);
+  const [cardUid, setCardUid] = useState("");
 
   const load = async () => {
     const [emp, locationData, wageHistory] = await Promise.all([
@@ -203,6 +208,37 @@ export default function EmployeeDetailPage() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate an employee number.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveCard = async () => {
+    if (!employee) return;
+    try {
+      setBusy(true);
+      await setEmployeeCard(employee.id, cardUid.trim());
+      await load();
+      setCardUid("");
+      setEditingCard(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save card.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearCard = async () => {
+    if (!employee) return;
+    try {
+      setBusy(true);
+      await clearEmployeeCard(employee.id);
+      await load();
+      setEditingCard(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear card.");
     } finally {
       setBusy(false);
     }
@@ -440,6 +476,52 @@ export default function EmployeeDetailPage() {
                   )}
                   <Button variant="ghost" size="sm" onClick={() => setEditingPin(true)} disabled={busy}>
                     {employee.hasPinSet ? "Change" : "Set PIN"}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5 text-muted-foreground" />
+              NFC Card
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-sm text-muted-foreground">
+              The card ID the time clock reads. Scan an unassigned card at the clock and it shows the ID to enter here.
+            </p>
+            {editingCard ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={cardUid}
+                  onChange={(e) => setCardUid(e.target.value.toUpperCase())}
+                  placeholder="04A1B2C3"
+                  maxLength={32}
+                  className="w-56 font-mono"
+                />
+                <Button size="sm" onClick={handleSaveCard} disabled={busy || !cardUid.trim()}>Save</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => { setEditingCard(false); setCardUid(""); }}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <p className="font-semibold font-mono">{employee.cardUid || "No card"}</p>
+                <div className="flex gap-2">
+                  {employee.cardUid && (
+                    <Button variant="ghost" size="sm" onClick={handleClearCard} disabled={busy}>Clear</Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setCardUid(employee.cardUid ?? ""); setEditingCard(true); }}
+                    disabled={busy}
+                  >
+                    {employee.cardUid ? "Re-assign" : "Assign card"}
                   </Button>
                 </div>
               </div>

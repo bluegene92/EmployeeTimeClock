@@ -1,0 +1,17 @@
+# Arduino build
+build/
+*.hex
+*.elf
+*.bin
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local secrets (copy from secrets.example.ino if you use one)
+secrets.h
+config_private.h

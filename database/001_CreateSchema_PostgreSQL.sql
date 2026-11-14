@@ -30,6 +30,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS "UX_Employees_EmployeeNumber_Open"
     ON "Employees" ("EmployeeNumber") WHERE "IsDeleted" = false;
 CREATE UNIQUE INDEX IF NOT EXISTS "UX_Employees_Pin_Open"
     ON "Employees" ("Pin") WHERE "IsDeleted" = false AND "Pin" IS NOT NULL;
+-- NFC card UID read by the clock, as uppercase hex with no separators.
+ALTER TABLE "Employees" ADD COLUMN IF NOT EXISTS "CardUid" VARCHAR(32) NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS "UX_Employees_CardUid_Open"
+    ON "Employees" ("CardUid") WHERE "IsDeleted" = false AND "CardUid" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "IX_Employees_IsActive" ON "Employees" ("IsActive");
 CREATE INDEX IF NOT EXISTS "IX_Employees_LocationId" ON "Employees" ("LocationId");
 

@@ -17,6 +17,8 @@ public interface IEmployeeRepository
     Task<string?> CheckEmployeeNumberAsync(string employeeNumber, Guid? excludeId, CancellationToken ct = default);
     Task<PinUpdateResult> SetPinAsync(Guid id, string pin, CancellationToken ct = default);
     Task<bool> ClearPinAsync(Guid id, CancellationToken ct = default);
+    Task<PinUpdateResult> SetCardAsync(Guid id, string cardUid, CancellationToken ct = default);
+    Task<bool> ClearCardAsync(Guid id, CancellationToken ct = default);
     Task<Employee?> VerifyPinAndGetEmployeeAsync(string pin, CancellationToken ct = default);
 }
 
