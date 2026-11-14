@@ -328,8 +328,6 @@ export default function TimeClockPage() {
                         {formatDate(d)}
                       </th>
                     ))}
-                    <th className="min-w-[80px] px-2 py-2 text-center font-medium">Total hrs</th>
-                    <th className="min-w-[100px] px-2 py-2 text-center font-medium">Total wages</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -337,8 +335,16 @@ export default function TimeClockPage() {
                     const periodKey = `${emp.id}|${toDateKey(range.start)}`;
                     const verified = rateByKey.get(periodKey)?.isVerified ?? false;
                     const isSalary = emp.wageRate?.rateType === "Salary" || rateByKey.get(periodKey)?.rateType === "Salary";
-                    let totalHours = 0;
-                    let daysToReview = 0;
+                    const days = range.dates.map((d) => {
+                      const dateKey = toDateKey(d);
+                      const dayPunches = grid.get(emp.id)?.get(dateKey) ?? [];
+                      const dayRate = rateByKey.get(`${emp.id}|${dateKey}`);
+                      return { d, dateKey, dayPunches, dayRate, ...calculateHoursForPunches(dayPunches) };
+                    });
+                    const totalHours = days.reduce((sum, day) => sum + day.hours, 0);
+                    const daysToReview = days.filter((day) => day.needsReview).length;
+                    const ratedDays = days.filter((day) => day.dayRate?.hourlyRate != null);
+                    const totalPay = ratedDays.reduce((sum, day) => sum + day.hours * (day.dayRate?.hourlyRate ?? 0), 0);
                     return (
                       <tr key={emp.id} className="group border-b border-border hover:bg-muted/20">
                         <td className="sticky left-0 z-10 border-r border-border bg-background px-3 py-2 font-medium">
@@ -356,6 +362,18 @@ export default function TimeClockPage() {
                                   ? ` · $${emp.wageRate.hourlyRate.toFixed(2)}/hr`
                                   : ""}
                             </p>
+                            <p className="mt-1 text-xs">
+                              <span className="font-medium">{totalHours.toFixed(2)} hrs</span>
+                              <span className="text-muted-foreground"> · </span>
+                              <span className="font-medium">
+                                {isSalary ? "Salary" : ratedDays.length > 0 ? `$${totalPay.toFixed(2)}` : "No rate"}
+                              </span>
+                            </p>
+                            {daysToReview > 0 && (
+                              <p className="text-[10px] font-medium text-destructive">
+                                {daysToReview} {daysToReview === 1 ? "day" : "days"} not counted (missing punch)
+                              </p>
+                            )}
                             {!emp.isDeleted && (
                               <Button
                                 variant="ghost"
@@ -368,13 +386,7 @@ export default function TimeClockPage() {
                             )}
                           </div>
                         </td>
-                        {range.dates.map((d) => {
-                          const dateKey = toDateKey(d);
-                          const dayPunches = grid.get(emp.id)?.get(dateKey) ?? [];
-                          const { hours, needsReview } = calculateHoursForPunches(dayPunches);
-                          totalHours += hours;
-                          if (needsReview) daysToReview++;
-                          const dayRate = rateByKey.get(`${emp.id}|${dateKey}`);
+                        {days.map(({ d, dateKey, dayPunches, dayRate, hours, needsReview }) => {
                           return (
                             <td
                               key={dateKey}
@@ -431,31 +443,6 @@ export default function TimeClockPage() {
                             </td>
                           );
                         })}
-                        <td className="bg-muted/20 px-2 py-2 text-center font-medium">
-                          {totalHours.toFixed(1)}h
-                          {daysToReview > 0 && (
-                            <div className="text-[10px] font-medium text-destructive">
-                              {daysToReview} {daysToReview === 1 ? "day" : "days"} not counted
-                            </div>
-                          )}
-                        </td>
-                        <td className="bg-muted/20 px-2 py-2 text-center font-medium">
-                          {isSalary
-                            ? "Salary"
-                            : (() => {
-                                let pay = 0;
-                                let rated = false;
-                                for (const d of range.dates) {
-                                  const key = toDateKey(d);
-                                  const { hours } = calculateHoursForPunches(grid.get(emp.id)?.get(key) ?? []);
-                                  const rate = rateByKey.get(`${emp.id}|${key}`)?.hourlyRate;
-                                  if (rate == null) continue;
-                                  rated = true;
-                                  pay += hours * rate;
-                                }
-                                return rated ? `$${pay.toFixed(2)}` : "—";
-                              })()}
-                        </td>
                       </tr>
                     );
                   })}
