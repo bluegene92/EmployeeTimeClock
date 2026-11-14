@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TimeClock System Architecture</title>
+<style>
+  @page { size: Letter; margin: 0.7in 0.75in 0.8in 0.75in; }
+  :root { --ink:#1f2933; --muted:#5f6b7a; --line:#d5dbe3; --accent:#1d4ed8; --soft:#eef3fb; --warn:#b45309; --warnbg:#fff7e6; --bad:#b91c1c; --badbg:#fdecec; --ok:#047857; --okbg:#e7f6ef; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; color: var(--ink); font-size: 10.5pt; line-height: 1.45; margin: 0; }
+  h1 { font-size: 24pt; margin: 0 0 4pt; color: #0f172a; }
+  h2 { font-size: 15pt; color: #0f172a; border-bottom: 2px solid var(--accent); padding-bottom: 3pt; margin: 22pt 0 8pt; break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 14pt 0 5pt; color: #0f172a; break-after: avoid; }
+  p { margin: 0 0 7pt; }
+  ul, ol { margin: 0 0 8pt; padding-left: 18pt; }
+  li { margin-bottom: 2.5pt; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9pt; background: #f1f4f8; padding: 0 3px; border-radius: 3px; }
+  pre { font-family: Consolas, monospace; font-size: 8.6pt; background: #f6f8fb; border: 1px solid var(--line); border-radius: 6px; padding: 8pt 10pt; white-space: pre-wrap; break-inside: avoid; margin: 0 0 9pt; }
+  table { width: 100%; border-collapse: collapse; margin: 4pt 0 10pt; font-size: 9.3pt; break-inside: auto; }
+  th, td { border: 1px solid var(--line); padding: 4pt 6pt; text-align: left; vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; }
+  tr { break-inside: avoid; }
+  .cover { height: 9.2in; display: flex; flex-direction: column; justify-content: center; break-after: page; }
+  .cover .sub { font-size: 13pt; color: var(--muted); margin-bottom: 26pt; }
+  .cover .meta { font-size: 10pt; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10pt; }
+  .cover .meta div { margin-bottom: 3pt; }
+  .toc { break-after: page; }
+  .toc ol { font-size: 11pt; line-height: 1.8; }
+  .figure { border: 1px solid var(--line); border-radius: 8px; padding: 8pt; margin: 6pt 0 12pt; break-inside: avoid; }
+  .figure .cap { font-size: 9pt; color: var(--muted); margin-top: 4pt; text-align: center; }
+  .note, .warn, .bad, .good { border-radius: 6px; padding: 7pt 10pt; margin: 6pt 0 10pt; break-inside: avoid; }
+  .note { background: var(--soft); border-left: 4px solid var(--accent); }
+  .warn { background: var(--warnbg); border-left: 4px solid var(--warn); }
+  .bad  { background: var(--badbg); border-left: 4px solid var(--bad); }
+  .good { background: var(--okbg); border-left: 4px solid var(--ok); }
+  .tag { display: inline-block; font-size: 8pt; font-weight: 600; border-radius: 4px; padding: 0 5px; }
+  .t-ok { background: var(--okbg); color: var(--ok); }
+  .t-warn { background: var(--warnbg); color: var(--warn); }
+  .t-bad { background: var(--badbg); color: var(--bad); }
+  .page-break { break-before: page; }
+  svg text { font-family: "Segoe UI", Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<!-- ============================== COVER ============================== -->
+<section class="cover">
+  <h1>TimeClock System Architecture</h1>
+  <div class="sub">API, admin web app, ESP32 time clock, PostgreSQL database, and Render hosting:<br>how they connect, how they are secured, and how punches survive network outages.</div>
+  <div class="meta">
+    <div><b>Repository:</b> github.com/bluegene92/EmployeeTimeClock (branch <code>main</code>)</div>
+    <div><b>Documented revision:</b> commit <code>68e1aff</code>, November 14, 2026</div>
+    <div><b>Hosted API:</b> https://timeclock-api-yems.onrender.com</div>
+  </div>
+</section>
+
+<section class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li>System overview</li>
+    <li>Components at a glance</li>
+    <li>PostgreSQL database</li>
+    <li>TimeClock API (.NET 9)</li>
+    <li>Admin web app (Next.js)</li>
+    <li>ESP32 time clock</li>
+    <li>Render hosting and deployment</li>
+    <li>End-to-end data flows</li>
+    <li>Offline operation and recovery</li>
+    <li>Security model</li>
+    <li>Time and date handling</li>
+    <li>Operations: configuration, monitoring, and troubleshooting</li>
+    <li>Known limitations and recommended next steps</li>
+    <li>Appendix: API endpoint reference</li>
+  </ol>
+</section>
+
+<!-- ============================== 1 ============================== -->
+<h2>1. System overview</h2>
+<p>TimeClock records when employees start and stop work, and lets an administrator review those times, correct them, and calculate pay. It has four parts:</p>
+<ul>
+  <li><b>ESP32 time clock</b> mounted at a store. Employees tap an NFC card. The clock records the punch on its own flash storage first, then uploads it.</li>
+  <li><b>TimeClock API</b>, an ASP.NET Core service hosted on Render. It is the only component that talks to the database.</li>
+  <li><b>PostgreSQL database</b> hosted on Render. It holds employees, locations, punches, wages, pay-period state, and the clock failure log.</li>
+  <li><b>Admin web app</b> (Next.js), run on the admin's computer. The admin manages employees, cards, wages, and punches, and reviews clock issues.</li>
+</ul>
+
+<div class="figure">
+<svg viewBox="0 0 760 400" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
+  </defs>
+  <!-- Store -->
+  <rect x="10" y="20" width="220" height="170" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-dasharray="5 4"/>
+  <text x="20" y="40" font-size="12" font-weight="600" fill="#475569">Store (each location)</text>
+  <rect x="30" y="55" width="180" height="120" rx="8" fill="#e0ecff" stroke="#1d4ed8"/>
+  <text x="120" y="77" font-size="13" font-weight="700" text-anchor="middle">ESP32 time clock</text>
+  <text x="120" y="96" font-size="10.5" text-anchor="middle">PN532 NFC reader, TFT screen,</text>
+  <text x="120" y="110" font-size="10.5" text-anchor="middle">Break / Day buttons</text>
+  <text x="120" y="130" font-size="10.5" text-anchor="middle" font-weight="600">LittleFS flash storage</text>
+  <text x="120" y="144" font-size="9.5" text-anchor="middle">punches.jsonl, failures.jsonl,</text>
+  <text x="120" y="157" font-size="9.5" text-anchor="middle">employees.json, state.json</text>
+
+  <!-- Admin PC -->
+  <rect x="10" y="215" width="220" height="170" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-dasharray="5 4"/>
+  <text x="20" y="235" font-size="12" font-weight="600" fill="#475569">Admin computer</text>
+  <rect x="30" y="245" width="180" height="40" rx="8" fill="#fff" stroke="#64748b"/>
+  <text x="120" y="270" font-size="11" text-anchor="middle">Web browser</text>
+  <rect x="30" y="310" width="180" height="62" rx="8" fill="#e7f6ef" stroke="#047857"/>
+  <text x="120" y="331" font-size="12.5" font-weight="700" text-anchor="middle">Admin app (Next.js)</text>
+  <text x="120" y="347" font-size="10" text-anchor="middle">localhost:3000</text>
+  <text x="120" y="361" font-size="10" text-anchor="middle">server-side proxy holds API key</text>
+  <line x1="120" y1="285" x2="120" y2="308" stroke="#334155" stroke-width="1.6" marker-end="url(#a)"/>
+
+  <!-- Render -->
+  <rect x="380" y="20" width="370" height="365" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-dasharray="5 4"/>
+  <text x="390" y="40" font-size="12" font-weight="600" fill="#475569">Render (cloud, Oregon region)</text>
+  <rect x="410" y="60" width="310" height="120" rx="8" fill="#fff4e0" stroke="#b45309"/>
+  <text x="565" y="83" font-size="13" font-weight="700" text-anchor="middle">Web service: timeclock-api</text>
+  <text x="565" y="101" font-size="10.5" text-anchor="middle">Docker image, ASP.NET Core 9, Dapper + Npgsql</text>
+  <text x="565" y="118" font-size="10.5" text-anchor="middle">Admin API key check on every route</text>
+  <text x="565" y="135" font-size="10.5" text-anchor="middle">/api/* = production DB, /api/test/* = test DB</text>
+  <text x="565" y="152" font-size="10.5" text-anchor="middle">Schema applied on every startup</text>
+  <text x="565" y="169" font-size="10.5" text-anchor="middle">Health check: GET /api/health</text>
+
+  <rect x="410" y="240" width="310" height="125" rx="8" fill="#ede9fe" stroke="#6d28d9"/>
+  <text x="565" y="263" font-size="13" font-weight="700" text-anchor="middle">PostgreSQL: timeclock-db</text>
+  <text x="565" y="285" font-size="10.5" text-anchor="middle">Database timeclock_x2fo (production)</text>
+  <text x="565" y="302" font-size="10.5" text-anchor="middle">Database timeclock_test (test)</text>
+  <text x="565" y="324" font-size="10.5" text-anchor="middle">Reached over Render's private network</text>
+  <text x="565" y="341" font-size="10.5" text-anchor="middle">SSL required for any non-local connection</text>
+  <line x1="565" y1="182" x2="565" y2="236" stroke="#334155" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="575" y="214" font-size="10" fill="#334155">SQL (internal URL)</text>
+
+  <!-- Arrows -->
+  <line x1="212" y1="110" x2="406" y2="110" stroke="#334155" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="225" y="100" font-size="10" fill="#334155">HTTPS + X-Admin-Api-Key</text>
+  <text x="225" y="126" font-size="9.5" fill="#64748b">upload punches, failures;</text>
+  <text x="225" y="138" font-size="9.5" fill="#64748b">download employee list</text>
+
+  <path d="M212 340 L300 340 L300 150 L406 150" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="232" y="332" font-size="10" fill="#334155">HTTPS + key</text>
+  <text x="306" y="250" font-size="9.5" fill="#64748b" transform="rotate(-90 306 250)">all admin actions</text>
+</svg>
+<div class="cap">Figure 1. Components and connections. Only the API connects to the database. The ESP32 and the admin app both call the API over HTTPS with the shared admin API key.</div>
+</div>
+
+<p>The design rule that shapes most decisions: <b>a scan at the clock must never wait for the network.</b> The clock writes each punch to flash storage, shows the result immediately, and uploads in the background. The API accepts each punch exactly once, even when the clock has to retry.</p>
+
+<!-- ============================== 2 ============================== -->
+<h2>2. Components at a glance</h2>
+<table>
+  <tr><th style="width:17%">Component</th><th style="width:25%">Technology</th><th style="width:22%">Where it runs</th><th>Source location</th></tr>
+  <tr><td>Database</td><td>PostgreSQL</td><td>Render managed Postgres <code>timeclock-db</code></td><td><code>database/001_CreateSchema_PostgreSQL.sql</code></td></tr>
+  <tr><td>API</td><td>.NET 9, ASP.NET Core controllers, Dapper, Npgsql</td><td>Render web service <code>timeclock-api</code> (Docker)</td><td><code>src/TimeClock.Api</code>, <code>Dockerfile</code>, <code>render.yaml</code></td></tr>
+  <tr><td>Admin web app</td><td>Next.js 16, React, TypeScript, Tailwind, Radix UI</td><td>Admin's computer, <code>npm run dev</code> on port 3000</td><td><code>src/timeclock-admin</code></td></tr>
+  <tr><td>Time clock</td><td>ESP32 (Arduino), PN532 NFC over I2C, ST7789 TFT, WiFiManager, ArduinoJson 7, LittleFS</td><td>Mounted at each store</td><td><code>src/timeclock-esp32</code></td></tr>
+  <tr><td>Source and deploys</td><td>GitHub, Render auto-deploy</td><td>Push to <code>main</code> deploys the API</td><td><code>render.yaml</code></td></tr>
+</table>
+
+<!-- ============================== 3 ============================== -->
+<h2>3. PostgreSQL database</h2>
+<h3>3.1 Databases</h3>
+<p>One Render Postgres instance hosts two databases with identical schemas:</p>
+<ul>
+  <li><code>timeclock_x2fo</code>: <b>production</b>. The ESP32 always writes here.</li>
+  <li><code>timeclock_test</code>: <b>test</b>. The admin app uses it when its environment switch (Settings page) is set to Test.</li>
+</ul>
+<h3>3.2 Schema management</h3>
+<p>There is no separate migration tool. The API runs <code>database/001_CreateSchema_PostgreSQL.sql</code> against <b>both</b> databases every time it starts. Every statement is idempotent (<code>CREATE TABLE IF NOT EXISTS</code>, <code>ADD COLUMN IF NOT EXISTS</code>, <code>CREATE INDEX IF NOT EXISTS</code>), so a deploy that adds a column or table updates the database automatically. New schema changes must follow the same rule: additive and safe to run repeatedly.</p>
+
+<h3>3.3 Tables</h3>
+<table>
+  <tr><th style="width:22%">Table</th><th>Purpose and key rules</th></tr>
+  <tr><td><code>Locations</code></td><td>Stores or sites. Name is unique (case-insensitive).</td></tr>
+  <tr><td><code>Employees</code></td><td>Name, email, <code>EmployeeNumber</code>, optional 4-digit <code>Pin</code>, optional NFC <code>CardUid</code>, home <code>LocationId</code>, active flag. Soft delete (<code>IsDeleted</code>). Employee number, PIN, and card are each unique among non-deleted employees (partial unique indexes).</td></tr>
+  <tr><td><code>TimePunches</code></td><td>One row per In or Out. <code>PunchType</code> 0 = In, 1 = Out. <code>PunchedAt</code> is local wall-clock time without a time zone. <code>Source</code> (Web, ESP32, ...) and <code>DeviceId</code> record where it came from. The row ID can be supplied by the client, which makes uploads idempotent.</td></tr>
+  <tr><td><code>WageRates</code></td><td>Hourly or salary rate history. At most one open rate per employee (<code>EffectiveTo IS NULL</code>).</td></tr>
+  <tr><td><code>DayRateOverrides</code></td><td>Admin-set hourly rate for one employee on one calendar day.</td></tr>
+  <tr><td><code>PayPeriodVerifications</code></td><td>Marks a 14-day pay period as verified for one employee.</td></tr>
+  <tr><td><code>FrozenDayRates</code></td><td>Day rates locked when a period is verified, so later wage changes do not alter verified pay.</td></tr>
+  <tr><td><code>PayPeriodSettings</code></td><td>Single row: the anchor date that bi-weekly periods are counted from.</td></tr>
+  <tr><td><code>ClockFailures</code></td><td>Scans that did not become a punch: unknown cards and punches the API rejected. Has <code>ResolvedAt</code> so admins can work through them. No foreign keys, because a failure may reference an employee that does not exist.</td></tr>
+</table>
+
+<h3>3.4 Relationships</h3>
+<div class="figure">
+<svg viewBox="0 0 760 230" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker></defs>
+  <g font-size="11">
+    <rect x="20" y="20" width="140" height="44" rx="6" fill="#ede9fe" stroke="#6d28d9"/><text x="90" y="47" text-anchor="middle" font-weight="600">Locations</text>
+    <rect x="300" y="20" width="160" height="44" rx="6" fill="#ede9fe" stroke="#6d28d9"/><text x="380" y="47" text-anchor="middle" font-weight="600">Employees</text>
+    <rect x="20" y="150" width="140" height="44" rx="6" fill="#ede9fe" stroke="#6d28d9"/><text x="90" y="177" text-anchor="middle" font-weight="600">TimePunches</text>
+    <rect x="190" y="150" width="130" height="44" rx="6" fill="#ede9fe" stroke="#6d28d9"/><text x="255" y="177" text-anchor="middle" font-weight="600">WageRates</text>
+    <rect x="340" y="150" width="140" height="44" rx="6" fill="#ede9fe" stroke="#6d28d9"/><text x="410" y="177" text-anchor="middle" font-weight="600">DayRateOverrides</text>
+    <rect x="500" y="150" width="120" height="44" rx="6" fill="#ede9fe" stroke="#6d28d9"/><text x="560" y="168" text-anchor="middle" font-weight="600">PayPeriod</text><text x="560" y="183" text-anchor="middle" font-weight="600">Verifications</text>
+    <rect x="630" y="150" width="120" height="44" rx="6" fill="#ede9fe" stroke="#6d28d9"/><text x="690" y="177" text-anchor="middle" font-weight="600">FrozenDayRates</text>
+    <rect x="560" y="20" width="180" height="44" rx="6" fill="#fff" stroke="#6d28d9" stroke-dasharray="4 3"/><text x="650" y="40" text-anchor="middle" font-weight="600">ClockFailures</text><text x="650" y="55" text-anchor="middle" font-size="9.5" fill="#64748b">soft links, no foreign keys</text>
+  </g>
+  <g stroke="#475569" stroke-width="1.4" fill="none">
+    <line x1="298" y1="42" x2="164" y2="42" marker-end="url(#b)"/>
+    <line x1="340" y1="66" x2="110" y2="148" marker-start="url(#b)"/>
+    <line x1="90" y1="148" x2="90" y2="68" marker-end="url(#b)"/>
+    <line x1="370" y1="66" x2="260" y2="148" marker-start="url(#b)"/>
+    <line x1="390" y1="66" x2="405" y2="148" marker-start="url(#b)"/>
+    <line x1="410" y1="66" x2="555" y2="148" marker-start="url(#b)"/>
+    <line x1="430" y1="66" x2="680" y2="148" marker-start="url(#b)"/>
+    <line x1="558" y1="42" x2="464" y2="42" stroke-dasharray="4 3" marker-end="url(#b)"/>
+  </g>
+  <text x="190" y="36" font-size="9.5" fill="#64748b">home location</text>
+  <text x="22" y="110" font-size="9.5" fill="#64748b">punch location</text>
+  <text x="20" y="220" font-size="9.5" fill="#64748b">Arrows point from the referencing table to the referenced table. All employee references use ON DELETE RESTRICT, which is why employees are soft-deleted.</text>
+</svg>
+<div class="cap">Figure 2. Table relationships.</div>
+</div>
+
+<!-- ============================== 4 ============================== -->
+<h2 class="page-break">4. TimeClock API (.NET 9)</h2>
+<h3>4.1 Structure</h3>
+<ul>
+  <li><b>Controllers</b> (<code>Controllers/</code>) define the HTTP routes and validate input.</li>
+  <li><b>Repositories</b> (<code>Repositories/</code>) hold all SQL, written by hand and executed with Dapper. Each request opens its own connection from <code>DbConnectionFactory</code>.</li>
+  <li><b>Models</b> (<code>Models/</code>) are plain classes. Enums such as <code>PunchType</code> are sent as strings (<code>"In"</code>, <code>"Out"</code>).</li>
+  <li><b>Pay logic</b> (<code>Pay/PayPeriodCalculator.cs</code>) computes 14-day periods from the anchor date.</li>
+</ul>
+
+<h3>4.2 Request pipeline</h3>
+<p>Every request passes through these steps in order (<code>Program.cs</code>):</p>
+<ol>
+  <li><b>CORS</b>: allows the origins in <code>CORS_ORIGINS</code> (default <code>http://localhost:3000</code>). In practice the browser never calls the API directly, because the admin app proxies all calls.</li>
+  <li><b>Admin API key check</b> (<code>AdminApiKeyMiddleware</code>): rejects any request without the correct <code>X-Admin-Api-Key</code> header with 401. Exempt: <code>/api/health</code> and CORS preflight (OPTIONS).</li>
+  <li><b>Test database routing</b> (<code>TestDatabaseMiddleware</code>): a request to <code>/api/test/...</code> is rewritten to <code>/api/...</code> and flagged, and <code>DbConnectionFactory</code> then connects to <code>timeclock_test</code> instead of production. This runs before routing, so every endpoint automatically has a test twin.</li>
+  <li><b>Routing and controllers.</b></li>
+</ol>
+
+<h3>4.3 Startup</h3>
+<ol>
+  <li>Reads <code>DATABASE_URL</code> (a <code>postgresql://</code> URL is converted to an Npgsql connection string, and SSL is required for any non-local host).</li>
+  <li>On Render, binds to <code>0.0.0.0:$PORT</code>.</li>
+  <li>Applies the schema script to the production database, then to the test database. A failure on production stops startup. A failure on test is logged only.</li>
+  <li>In Development on Windows only, shows a dialog to pick the production or test database before starting. This never runs on Render.</li>
+</ol>
+
+<h3>4.4 Main capabilities</h3>
+<table>
+  <tr><th style="width:24%">Area</th><th>What the API does</th></tr>
+  <tr><td>Employees</td><td>Create, edit, soft delete. Generates the next free 4-digit employee number from 1000 upward (serialized with a Postgres advisory lock so two admins cannot get the same number). Checks number uniqueness against other employees' numbers and PINs.</td></tr>
+  <tr><td>Clock codes</td><td>4-digit PIN per employee. <code>POST /api/auth/verify-pin</code> accepts a PIN or an employee number, for clocking in without a badge.</td></tr>
+  <tr><td>NFC cards</td><td>Assign or clear a card per employee. Card IDs are normalized to uppercase hex without separators and must be unique. Assigning a card resolves open unknown-card issues for it.</td></tr>
+  <tr><td>Punches</td><td>Single create, edit, and delete for admins. Batch <code>POST /api/timepunches/sync</code> for clocks: skips IDs it already has, and logs any rejected punch to <code>ClockFailures</code>.</td></tr>
+  <tr><td>Clock sync</td><td><code>GET /api/sync/employees</code> returns active employees with card ID and home location for the clock's local cache.</td></tr>
+  <tr><td>Clock failures</td><td>Clocks report unknown cards. Admins list, resolve, reopen, and delete issues.</td></tr>
+  <tr><td>Pay</td><td>Wage history, per-day rate overrides, pay-period settings, verify and unverify (freezes day rates).</td></tr>
+</table>
+<p>The full endpoint list is in the appendix.</p>
+
+<!-- ============================== 5 ============================== -->
+<h2>5. Admin web app (Next.js)</h2>
+<h3>5.1 Pages</h3>
+<table>
+  <tr><th style="width:22%">Page</th><th>Purpose</th></tr>
+  <tr><td>Employees</td><td>List, search, filter, bulk actions, add employee (with Generate employee number). Detail page: profile, PIN or clock code, NFC card, wage and history.</td></tr>
+  <tr><td>Locations</td><td>Add, rename, deactivate, delete stores.</td></tr>
+  <tr><td>Time Clock</td><td>Bi-weekly grid of punches per employee. Add, edit, delete punches. Day rate edits. Verify and unverify a period.</td></tr>
+  <tr><td>Clock Issues</td><td>Failed scans from the clocks. Assign an unknown card to an employee, mark resolved, reopen, delete.</td></tr>
+  <tr><td>Reports</td><td>Placeholder.</td></tr>
+  <tr><td>Settings</td><td>Production or Test environment switch, and the pay-period start date.</td></tr>
+</table>
+
+<h3>5.2 How it reaches the API</h3>
+<p>The browser never calls the API directly. Every call goes to the app's own route <code>/api/backend/...</code>, implemented in <code>src/app/api/backend/[...path]/route.ts</code>. That code runs on the Next.js server (Node.js on the admin's computer). It:</p>
+<ol>
+  <li>Builds the upstream URL from <code>API_URL</code> in <code>.env.local</code>.</li>
+  <li>Adds the <code>X-Admin-Api-Key</code> header from <code>ADMIN_API_KEY</code> in <code>.env.local</code>.</li>
+  <li>Forwards the method, body, and content type, and returns the API's response unchanged (with special handling for empty 204 responses).</li>
+</ol>
+<p>Because the key lives only in server-side environment variables (not prefixed with <code>NEXT_PUBLIC_</code>), it is never sent to the browser.</p>
+
+<h3>5.3 Production and Test switch</h3>
+<p>The Settings page stores the choice in the browser's <code>localStorage</code> (<code>timeclock-environment</code>). When it is Test, <code>lib/api.ts</code> rewrites every <code>/api/...</code> path to <code>/api/test/...</code>, the API sends those requests to <code>timeclock_test</code>, and the app shows an amber "Test environment" banner. The ESP32 has no such switch: it always uses production.</p>
+
+<!-- ============================== 6 ============================== -->
+<h2 class="page-break">6. ESP32 time clock</h2>
+<h3>6.1 Hardware</h3>
+<table>
+  <tr><th style="width:28%">Part</th><th>Connection</th></tr>
+  <tr><td>ST7789 TFT display (240x320)</td><td>SPI: CS 5, DC 27, RST 33</td></tr>
+  <tr><td>PN532 NFC reader</td><td>I2C: SDA 21, SCL 22, RST 25</td></tr>
+  <tr><td>Break button</td><td>GPIO 26 to ground (internal pull-up)</td></tr>
+  <tr><td>End-of-day button</td><td>GPIO 32 to ground (internal pull-up)</td></tr>
+  <tr><td>Buzzer</td><td>GPIO 13</td></tr>
+</table>
+
+<h3>6.2 Files on flash (LittleFS)</h3>
+<table>
+  <tr><th style="width:22%">File</th><th>Contents</th><th style="width:28%">Lifecycle</th></tr>
+  <tr><td><code>/punches.jsonl</code></td><td>Upload queue. One punch per line, already in the exact format the API expects.</td><td>Appended on each punch. A line is removed only after the API accepts it (or rejects it as invalid).</td></tr>
+  <tr><td><code>/failures.jsonl</code></td><td>Unknown-card scans waiting to be reported.</td><td>Appended on each unknown card. Removed after upload.</td></tr>
+  <tr><td><code>/employees.json</code></td><td>Cached employee list: ID, name, card ID, home location. Only employees with a card.</td><td>Replaced on each successful download (written to a temp file, then renamed).</td></tr>
+  <tr><td><code>/state.json</code></td><td>Each employee's status today: <code>IN</code>, <code>BREAK</code>, or <code>OUT</code>.</td><td>Updated on each punch. Entries from earlier days are ignored and pruned.</td></tr>
+</table>
+<p>A queued punch line looks like this:</p>
+<pre>{"id":"3f2a9c1e-8b7d-4e21-9a55-0c4d2b1e7f60","employeeId":"03c85ba3-649c-4268-bdf4-5294a54476a6",
+ "punchType":"In","punchedAt":"2026-11-14T08:30:00","locationId":"e1e5bd66-0268-4ab6-875e-6dfe20a12464",
+ "source":"ESP32","deviceId":"esp32-A0:B7:65:12:34:56"}</pre>
+<ul>
+  <li><code>id</code> is a random version-4 GUID made on the clock with the hardware random number generator. It is the key to duplicate-free retries (section 9).</li>
+  <li><code>locationId</code> is <code>DEVICE_LOCATION_ID</code> from <code>secrets.h</code> if set, otherwise the employee's home location.</li>
+  <li><code>deviceId</code> is <code>esp32-</code> plus the board's Wi-Fi MAC address.</li>
+</ul>
+
+<h3>6.3 What a scan does</h3>
+<div class="figure">
+<svg viewBox="0 0 760 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker></defs>
+  <g font-size="10.5">
+    <rect x="290" y="8" width="180" height="32" rx="16" fill="#e0ecff" stroke="#1d4ed8"/><text x="380" y="29" text-anchor="middle" font-weight="600">Card tapped</text>
+    <polygon points="380,58 480,88 380,118 280,88" fill="#fff" stroke="#334155"/><text x="380" y="85" text-anchor="middle">Card in cached</text><text x="380" y="98" text-anchor="middle">employee list?</text>
+    <rect x="20" y="70" width="210" height="62" rx="6" fill="#fdecec" stroke="#b91c1c"/><text x="125" y="90" text-anchor="middle" font-weight="600">UNKNOWN CARD + card ID</text><text x="125" y="105" text-anchor="middle">Queue report to failures.jsonl</text><text x="125" y="120" text-anchor="middle">Refresh employee list soon</text>
+    <polygon points="380,140 480,170 380,200 280,170" fill="#fff" stroke="#334155"/><text x="380" y="167" text-anchor="middle">Clock time set</text><text x="380" y="180" text-anchor="middle">by NTP?</text>
+    <rect x="20" y="152" width="210" height="36" rx="6" fill="#fdecec" stroke="#b91c1c"/><text x="125" y="175" text-anchor="middle" font-weight="600">CLOCK NOT SET (no punch)</text>
+    <polygon points="380,222 480,252 380,282 280,252" fill="#fff" stroke="#334155"/><text x="380" y="249" text-anchor="middle">Today's state</text><text x="380" y="262" text-anchor="middle">is IN?</text>
+    <rect x="530" y="140" width="220" height="80" rx="6" fill="#fff7e6" stroke="#b45309"/><text x="640" y="160" text-anchor="middle" font-weight="600">Show name + choice (15 s)</text><text x="640" y="177" text-anchor="middle">Break button: Out, state BREAK</text><text x="640" y="193" text-anchor="middle">Day button: Out, state OUT</text><text x="640" y="209" text-anchor="middle">No press: CANCELLED</text>
+    <rect x="530" y="246" width="220" height="62" rx="6" fill="#e7f6ef" stroke="#047857"/><text x="640" y="266" text-anchor="middle" font-weight="600">Punch In, state IN</text><text x="640" y="282" text-anchor="middle">Screen: CLOCKED IN or BREAK ENDED</text><text x="640" y="298" text-anchor="middle">with the employee's name</text>
+    <rect x="250" y="298" width="260" height="28" rx="6" fill="#f1f4f8" stroke="#64748b"/><text x="380" y="317" text-anchor="middle">Every punch: append to punches.jsonl first</text>
+  </g>
+  <g stroke="#334155" stroke-width="1.4" fill="none">
+    <line x1="380" y1="40" x2="380" y2="56" marker-end="url(#c)"/>
+    <line x1="280" y1="88" x2="234" y2="98" marker-end="url(#c)"/>
+    <line x1="380" y1="118" x2="380" y2="138" marker-end="url(#c)"/>
+    <line x1="280" y1="170" x2="234" y2="170" marker-end="url(#c)"/>
+    <line x1="380" y1="200" x2="380" y2="220" marker-end="url(#c)"/>
+    <path d="M480 252 L505 252 L505 180 L527 180" marker-end="url(#c)"/>
+    <line x1="480" y1="262" x2="527" y2="272" marker-end="url(#c)"/>
+  </g>
+  <g font-size="9.5" fill="#475569">
+    <text x="245" y="84">no</text><text x="388" y="132">yes</text>
+    <text x="245" y="164">no</text><text x="388" y="214">yes</text>
+    <text x="486" y="246">yes</text><text x="486" y="276">no</text>
+  </g>
+</svg>
+<div class="cap">Figure 3. Scan handling on the clock. No step waits for the network.</div>
+</div>
+
+<h3>6.4 Background work</h3>
+<p>Network work runs only while the clock is idle (not showing a message and not waiting for the Break or Day choice), so it never slows a scan.</p>
+<table>
+  <tr><th style="width:30%">Task</th><th>When</th></tr>
+  <tr><td>Upload punches, then failures</td><td>Every 30 seconds, and 3 seconds after a new punch or failure. Up to 20 lines per request.</td></tr>
+  <tr><td>Download employee list</td><td>At startup, every 15 minutes, and about 1 minute after an unknown card (at most once a minute).</td></tr>
+  <tr><td>Set clock time</td><td>SNTP from <code>pool.ntp.org</code> and <code>time.nist.gov</code>, time zone <code>CST6CDT</code> (US Central with daylight saving). Keeps retrying in the background.</td></tr>
+  <tr><td>Wi-Fi</td><td>WiFiManager. On first boot, or if the saved network fails, the clock opens a setup hotspot <code>TimeClock-Setup</code> for 3 minutes. Auto-reconnect is on.</td></tr>
+</table>
+
+<h3>6.5 Configuration (<code>secrets.h</code>)</h3>
+<p>Copy <code>secrets.example.h</code> to <code>secrets.h</code> (ignored by git) and set <code>ADMIN_API_KEY</code> to the same value as on Render. Optional: <code>API_BASE_URL</code> (defaults to the Render URL) and <code>DEVICE_LOCATION_ID</code>. If the key is empty, the clock still records punches locally but uploads nothing.</p>
+
+<!-- ============================== 7 ============================== -->
+<h2 class="page-break">7. Render hosting and deployment</h2>
+<h3>7.1 Services</h3>
+<p>Defined in <code>render.yaml</code> (a Render Blueprint):</p>
+<table>
+  <tr><th style="width:25%">Resource</th><th>Configuration</th></tr>
+  <tr><td>Postgres <code>timeclock-db</code></td><td>Plan <code>0.1c-256mb</code>. Same region as the API, so the API connects over Render's private network using the internal URL.</td></tr>
+  <tr><td>Web service <code>timeclock-api</code></td><td>Runtime Docker, built from <code>./Dockerfile</code>. Health check <code>/api/health</code>. Public HTTPS URL with a certificate managed by Render.</td></tr>
+</table>
+
+<h3>7.2 Environment variables on the web service</h3>
+<table>
+  <tr><th style="width:26%">Variable</th><th>Value and purpose</th></tr>
+  <tr><td><code>ASPNETCORE_ENVIRONMENT</code></td><td><code>Production</code>. Turns off the debug database picker and makes the API key mandatory.</td></tr>
+  <tr><td><code>DATABASE_URL</code></td><td>Injected from <code>timeclock-db</code>. Points at the production database.</td></tr>
+  <tr><td><code>ADMIN_API_KEY</code></td><td>Shared secret, set by hand in the Render dashboard (<code>sync: false</code>, so it is never in git). If missing, every request except the health check is rejected.</td></tr>
+  <tr><td><code>CORS_ORIGINS</code></td><td><code>http://localhost:3000</code>.</td></tr>
+  <tr><td><code>PORT</code></td><td>Set by Render. The API listens on it.</td></tr>
+  <tr><td><code>TEST_DATABASE</code> (optional)</td><td>Name of the test database. Default <code>timeclock_test</code>.</td></tr>
+</table>
+
+<h3>7.3 Build and deploy</h3>
+<ol>
+  <li>A push to <code>main</code> on GitHub triggers a Render deploy.</li>
+  <li>The Dockerfile builds in two stages: the .NET 9 SDK image runs <code>dotnet publish</code>, then the result and the <code>database/</code> folder are copied into the smaller ASP.NET runtime image.</li>
+  <li>Render starts the new container. On startup the API applies the schema to both databases.</li>
+  <li>Render routes traffic to the new container once <code>/api/health</code> answers.</li>
+</ol>
+<div class="warn"><b>Every push to <code>main</code> changes production.</b> Schema changes apply to the production database on startup. Test with the admin app in Test mode, or with a local API, before pushing.</div>
+<div class="note"><b>Cold starts.</b> If the web service is on a plan that sleeps when idle, the first request after a quiet period can take 30 to 60 seconds. The clock's upload timeout is 10 seconds, so that first upload may fail. Nothing is lost: the punch stays queued and the next attempt, 30 seconds later, reaches a running service.</div>
+
+<!-- ============================== 8 ============================== -->
+<h2>8. End-to-end data flows</h2>
+<h3>8.1 Employee clocks in at the store</h3>
+<div class="figure">
+<svg viewBox="0 0 760 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker></defs>
+  <g font-size="11" font-weight="600" text-anchor="middle">
+    <rect x="20" y="8" width="110" height="28" rx="5" fill="#f1f4f8" stroke="#64748b"/><text x="75" y="27">Employee</text>
+    <rect x="185" y="8" width="130" height="28" rx="5" fill="#e0ecff" stroke="#1d4ed8"/><text x="250" y="27">ESP32</text>
+    <rect x="370" y="8" width="110" height="28" rx="5" fill="#e0ecff" stroke="#1d4ed8"/><text x="425" y="27">Flash storage</text>
+    <rect x="530" y="8" width="100" height="28" rx="5" fill="#fff4e0" stroke="#b45309"/><text x="580" y="27">API</text>
+    <rect x="655" y="8" width="95" height="28" rx="5" fill="#ede9fe" stroke="#6d28d9"/><text x="702" y="27">Postgres</text>
+  </g>
+  <g stroke="#cbd5e1" stroke-dasharray="4 4"><line x1="75" y1="36" x2="75" y2="322"/><line x1="250" y1="36" x2="250" y2="322"/><line x1="425" y1="36" x2="425" y2="322"/><line x1="580" y1="36" x2="580" y2="322"/><line x1="702" y1="36" x2="702" y2="322"/></g>
+  <g stroke="#334155" stroke-width="1.4" fill="none" font-size="10">
+    <line x1="75" y1="60" x2="246" y2="60" marker-end="url(#d)"/>
+    <line x1="250" y1="88" x2="421" y2="88" marker-end="url(#d)"/>
+    <line x1="250" y1="116" x2="421" y2="116" marker-end="url(#d)"/>
+    <line x1="246" y1="144" x2="79" y2="144" marker-end="url(#d)"/>
+    <line x1="250" y1="200" x2="576" y2="200" marker-end="url(#d)"/>
+    <line x1="580" y1="226" x2="698" y2="226" marker-end="url(#d)"/>
+    <line x1="576" y1="254" x2="254" y2="254" marker-end="url(#d)"/>
+    <line x1="250" y1="284" x2="421" y2="284" marker-end="url(#d)"/>
+  </g>
+  <g font-size="10" fill="#1f2933">
+    <text x="90" y="54">tap card</text>
+    <text x="262" y="82">look up card in employees.json</text>
+    <text x="262" y="110">append punch to punches.jsonl</text>
+    <text x="90" y="138">"CLOCKED IN  Dat Tran" (well under a second)</text>
+    <text x="80" y="176" fill="#64748b" font-style="italic">... later, when the clock is idle (3 s to 30 s) ...</text>
+    <text x="262" y="194">POST /api/timepunches/sync  (up to 20 punches, API key)</text>
+    <text x="590" y="208">INSERT, skip</text>
+    <text x="590" y="220">known IDs</text>
+    <text x="262" y="248">200 {"syncedCount": 1}</text>
+    <text x="262" y="278">remove the uploaded lines from the queue</text>
+  </g>
+</svg>
+<div class="cap">Figure 4. Clock-in sequence. The employee sees the result before any network traffic happens.</div>
+</div>
+
+<h3>8.2 Assigning a new badge</h3>
+<ol>
+  <li>The employee taps a new card. The clock shows <b>UNKNOWN CARD</b> and the card ID, and queues a report.</li>
+  <li>The report reaches the API. If the card already belongs to someone (assigned after the clock's last list download), the issue names that employee. Otherwise it says the card is not assigned.</li>
+  <li>The admin opens <b>Clock Issues</b>, clicks the card button, and picks the employee. The card is saved and all open unknown-card issues for it are resolved.</li>
+  <li>About a minute after the unknown card, the clock downloads the employee list again. The next tap works.</li>
+</ol>
+<p>The admin can also type the card ID on the employee's page under <b>NFC Card</b>.</p>
+
+<h3>8.3 Clocking in without a badge</h3>
+<p>An employee who forgot the badge can use a 4-digit clock code. The admin generates it on the employee's page (next free number from 1000, used as both employee number and PIN). <code>POST /api/auth/verify-pin</code> accepts the PIN or the employee number. The ESP32 build documented here has no keypad, so this path is for a PIN-capable clock app or for the admin adding the punch by hand.</p>
+
+<h3>8.4 Admin corrections</h3>
+<p>The admin adds, edits, or deletes punches on the Time Clock grid. These go through the same API with <code>Source = "Web"</code>. The clock does not learn about these edits (see section 13).</p>
+
+<!-- ============================== 9 ============================== -->
+<h2 class="page-break">9. Offline operation and recovery</h2>
+<p>The clock is designed so that a Wi-Fi outage, an API outage, or a slow server start never loses a punch and never creates a duplicate.</p>
+
+<h3>9.1 Three guarantees</h3>
+<ol>
+  <li><b>Write first.</b> A punch is appended to <code>/punches.jsonl</code> on flash before the screen confirms it. If the write fails, the clock shows <b>SAVE FAILED</b> instead of a false confirmation.</li>
+  <li><b>Delete only after the API answers.</b> Lines leave the queue only when the API replies 200 (stored) or 400 (permanently invalid, and logged to Clock Issues by the API). Any other outcome, such as no Wi-Fi, a timeout, 401, or 5xx, leaves the queue untouched for the next attempt.</li>
+  <li><b>Retries are harmless.</b> Each punch carries a GUID made on the clock. The API inserts with <code>ON CONFLICT ("Id") DO NOTHING</code> and counts only new rows. If the clock's upload reached the database but the reply was lost, the clock sends it again and the database ignores the copy.</li>
+</ol>
+
+<h3>9.2 What still works offline</h3>
+<ul>
+  <li>Card lookup, names on screen, and the In or Break/Day decision all use files on the clock.</li>
+  <li>The clock keeps time with its internal clock once NTP has set it. It needs the network only once after power-up to learn the time.</li>
+  <li>New cards assigned in the admin app are not known until the clock can download the list again.</li>
+</ul>
+
+<h3>9.3 When the network comes back</h3>
+<p>Wi-Fi reconnects automatically. Within 30 seconds the clock uploads the oldest 20 queued punches; each successful batch is removed and the next batch follows on the next cycle, until the queue is empty. Punch times are the times recorded at the scan, not the upload time, so the timesheet is correct regardless of how late the upload is. Unknown-card reports follow the same pattern.</p>
+
+<h3>9.4 Scenario table</h3>
+<table>
+  <tr><th style="width:30%">Situation</th><th>What happens</th><th style="width:14%">Data lost?</th></tr>
+  <tr><td>Wi-Fi down for hours</td><td>Punches accumulate on flash and upload in order when Wi-Fi returns. A punch line is about 250 bytes, so the flash holds thousands of punches.</td><td><span class="tag t-ok">No</span></td></tr>
+  <tr><td>API asleep or slow to start</td><td>First upload times out. The next attempt 30 seconds later succeeds.</td><td><span class="tag t-ok">No</span></td></tr>
+  <tr><td>Reply lost after the database saved the punch</td><td>Clock retries with the same IDs. Database skips them.</td><td><span class="tag t-ok">No duplicates</span></td></tr>
+  <tr><td>API returns 5xx or 401 (wrong key)</td><td>Queue kept. Uploads resume once fixed.</td><td><span class="tag t-ok">No</span></td></tr>
+  <tr><td>One punch in a batch is invalid (for example, employee deleted)</td><td>Batch gets 400. Clock resends one punch at a time. Valid ones are stored. The invalid one is logged to Clock Issues by the API and dropped from the clock.</td><td><span class="tag t-warn">Logged for review</span></td></tr>
+  <tr><td>Power loss</td><td>Queue and state files survive on flash. Upload resumes after boot.</td><td><span class="tag t-ok">No</span> (see 13 for a small edge case)</td></tr>
+  <tr><td>Clock booted without Wi-Fi, time never set</td><td>Shows <b>CLOCK NOT SET</b> and records nothing until NTP succeeds. Unknown-card reports are still queued, without a scan time.</td><td><span class="tag t-bad">Scan not recorded</span></td></tr>
+  <tr><td>Card assigned in the admin app while offline</td><td>Clock still shows UNKNOWN CARD until it can download the list. Each attempt is reported to Clock Issues.</td><td><span class="tag t-warn">Logged for review</span></td></tr>
+</table>
+
+<!-- ============================== 10 ============================== -->
+<h2 class="page-break">10. Security model</h2>
+<h3>10.1 Trust boundaries</h3>
+<table>
+  <tr><th style="width:24%">Connection</th><th>Protection</th></tr>
+  <tr><td>ESP32 to API</td><td>HTTPS (TLS). Admin API key in the <code>X-Admin-Api-Key</code> header.</td></tr>
+  <tr><td>Browser to admin app</td><td>Local only (<code>http://localhost:3000</code>), on the admin's own computer. Placeholder login (see 10.4).</td></tr>
+  <tr><td>Admin app server to API</td><td>HTTPS. Admin API key added by the server-side proxy. The key is never sent to the browser.</td></tr>
+  <tr><td>API to Postgres</td><td>Render's private network using the internal URL. SSL is required whenever the host is not local. Database credentials exist only in Render's <code>DATABASE_URL</code>, and locally in .NET user secrets.</td></tr>
+</table>
+
+<h3>10.2 Admin API key</h3>
+<ul>
+  <li>One shared secret, configured as <code>ADMIN_API_KEY</code> in three places: the Render web service, the admin app's <code>.env.local</code>, and the clock's <code>secrets.h</code>. All three are excluded from git.</li>
+  <li>Required on every route except <code>/api/health</code>. Compared in constant time, so response timing does not reveal how much of a guess was right.</li>
+  <li>Outside Development, a missing key on the server fails closed: every request is rejected.</li>
+  <li>The test database routes (<code>/api/test/...</code>) need the same key.</li>
+  <li><b>Rotation:</b> set a new value on Render, update <code>.env.local</code> and restart the admin app, and reflash each clock. Clocks with the old key keep their punches queued (401 is retried) and upload them after reflashing.</li>
+</ul>
+
+<h3>10.3 Secrets inventory</h3>
+<table>
+  <tr><th style="width:26%">Secret</th><th>Stored in</th><th style="width:30%">Kept out of git by</th></tr>
+  <tr><td>Admin API key</td><td>Render env var, <code>timeclock-admin/.env.local</code>, <code>timeclock-esp32/secrets.h</code></td><td>Render <code>sync: false</code>; <code>.gitignore</code> entries</td></tr>
+  <tr><td>Database URL and password</td><td>Render env var; .NET user secrets for local development</td><td>Not in any repository file</td></tr>
+  <tr><td>Store Wi-Fi password</td><td>ESP32 flash (WiFiManager)</td><td>Entered through the setup hotspot, never in code</td></tr>
+</table>
+
+<h3>10.4 Known security gaps</h3>
+<div class="bad"><b>Admin login is a placeholder.</b> The login page checks a hard-coded <code>admin</code> / <code>admin123</code>, and "Sign in with Google" signs in without contacting Google. The session is only a <code>sessionStorage</code> flag. This is acceptable only because the app runs on the admin's own computer and the real protection is the API key on its server. Do not expose the admin app on a network or host it publicly until real authentication is added.</div>
+<div class="warn"><b>The ESP32 does not verify the server certificate.</b> It uses <code>setInsecure()</code>: traffic is encrypted, but a device on the store network that impersonates the API could capture the API key. Fix by embedding Render's root certificate in the firmware.</div>
+<div class="warn"><b>One key does everything.</b> A key pulled from a clock's flash grants full admin API access, including reading wages and deleting employees. A separate, limited clock key (sync and failure upload only) would contain that risk.</div>
+<div class="warn"><b>PINs are stored in plain text</b> as 4 digits, and the admin employee list shows them. A 4-digit code is guessable by design; <code>verify-pin</code> has no attempt limit.</div>
+<div class="warn"><b>NFC card IDs can be copied.</b> The clock trusts the card's UID, which inexpensive tools can clone. The name shown on each scan helps employees notice misuse; admins can review the <code>DeviceId</code> and times on punches.</div>
+<div class="note"><b>Other notes.</b> The setup hotspot password (<code>12345678</code>) is in the source code and only matters while the hotspot is open. Serial logs print card IDs and punch data, so the USB port should not be accessible in the store.</div>
+
+<!-- ============================== 11 ============================== -->
+<h2 class="page-break">11. Time and date handling</h2>
+<ul>
+  <li><b>Punch times are local wall-clock times</b> with no time zone, for example <code>2026-11-14T08:30:00</code>, stored in a <code>TIMESTAMP</code> (without time zone) column. The API marks incoming values as "unspecified" so .NET never shifts them.</li>
+  <li>The ESP32 converts NTP time to US Central (<code>CST6CDT,M3.2.0/2</code>, which handles daylight saving) before formatting. A clock installed in another time zone needs that string changed.</li>
+  <li><b>Shifts never cross midnight.</b> Each punch belongs to one calendar day, and the clock resets each employee's state at midnight. A late shift that ends after midnight must be split or corrected by the admin.</li>
+  <li>Audit columns (<code>CreatedAt</code>, <code>ReceivedAt</code>, <code>ResolvedAt</code>) are true timestamps in UTC (<code>TIMESTAMPTZ</code>).</li>
+  <li>Pay periods are 14 days, counted from the anchor date on the Settings page.</li>
+</ul>
+
+<!-- ============================== 12 ============================== -->
+<h2>12. Operations: configuration, monitoring, and troubleshooting</h2>
+<h3>12.1 Configuration summary</h3>
+<table>
+  <tr><th style="width:22%">Where</th><th>Setting</th></tr>
+  <tr><td>Render web service</td><td><code>ADMIN_API_KEY</code>, <code>DATABASE_URL</code>, <code>ASPNETCORE_ENVIRONMENT=Production</code>, <code>CORS_ORIGINS</code></td></tr>
+  <tr><td>Admin app <code>.env.local</code></td><td><code>API_URL=https://timeclock-api-yems.onrender.com</code>, <code>ADMIN_API_KEY</code></td></tr>
+  <tr><td>ESP32 <code>secrets.h</code></td><td><code>ADMIN_API_KEY</code>; optional <code>API_BASE_URL</code>, <code>DEVICE_LOCATION_ID</code></td></tr>
+  <tr><td>Local API</td><td>.NET user secrets <code>DATABASE_URL</code>; Development shows a production or test database picker</td></tr>
+</table>
+
+<h3>12.2 Where to look</h3>
+<table>
+  <tr><th style="width:26%">Signal</th><th>Meaning</th></tr>
+  <tr><td>Admin app, Clock Issues</td><td>Unknown cards and rejected punches. Review daily.</td></tr>
+  <tr><td><code>GET /api/health</code></td><td>API is up. No key needed.</td></tr>
+  <tr><td>Render logs</td><td>Startup schema application, unhandled errors, and a startup error if <code>ADMIN_API_KEY</code> is missing.</td></tr>
+  <tr><td>ESP32 serial monitor (115200 baud)</td><td>Wi-Fi status, HTTP codes for every upload and download, queued punches, and card IDs.</td></tr>
+</table>
+
+<h3>12.3 Common problems</h3>
+<table>
+  <tr><th style="width:32%">Symptom</th><th>Likely cause and fix</th></tr>
+  <tr><td>Every card shows UNKNOWN CARD</td><td>Clock has no employee list: wrong or empty <code>ADMIN_API_KEY</code>, no Wi-Fi, or no active employees with cards. Check serial output for the employee list HTTP code.</td></tr>
+  <tr><td>Punches on the clock never reach the admin app</td><td>Serial shows 401: key mismatch. Shows -1 or timeouts: network. The queue is safe in both cases.</td></tr>
+  <tr><td>Admin app shows "ADMIN_API_KEY is not configured"</td><td><code>.env.local</code> is missing the key. Add it and restart <code>npm run dev</code>.</td></tr>
+  <tr><td>Admin app shows data that does not match the clock</td><td>The Settings switch is on Test. The clock always writes to production.</td></tr>
+  <tr><td>CLOCK NOT SET after a power cut</td><td>The clock has not reached an NTP server yet. Restore Wi-Fi; it sets itself automatically.</td></tr>
+</table>
+
+<!-- ============================== 13 ============================== -->
+<h2 class="page-break">13. Known limitations and recommended next steps</h2>
+<h3>13.1 Behavior limits</h3>
+<ul>
+  <li><b>In/Out state is per clock.</b> Each clock decides In or Out from its own <code>state.json</code>. An employee who clocks in on one clock and out on another is recorded as In twice. Admin punch edits also do not reach the clock. A fix is to include each employee's last punch of the day in the sync download.</li>
+  <li><b>Up to 15 minutes to learn about changes</b> other than new cards (deactivations, name changes, removed cards). Unknown cards trigger a refresh within about a minute.</li>
+  <li><b>No punch without NTP time</b> after a power cut with no Wi-Fi. A battery-backed real-time clock module would remove this limit.</li>
+  <li><b>Queue rewrite window.</b> After an upload the clock rewrites the queue file by writing a temp file, deleting the original, and renaming. Power loss in the instant between delete and rename would leave the remaining punches in <code>/queue.tmp</code>. Recovering that file at boot would close the gap.</li>
+  <li><b>No keypad on the ESP32</b>, so badge-free clocking with a PIN requires another clock app or an admin-entered punch.</li>
+  <li><b>Unverified build.</b> The firmware was written against the libraries listed in the README but was not compiled on the documenting machine. Compile and bench-test before installing.</li>
+</ul>
+
+<h3>13.2 Recommended next steps, by priority</h3>
+<ol>
+  <li>Real admin authentication (for example, Google sign-in verified on the server), before the admin app is reachable by anyone else.</li>
+  <li>Certificate verification on the ESP32 (embed the root CA instead of <code>setInsecure()</code>).</li>
+  <li>A separate, limited API key per clock, so a stolen clock cannot read wages or change data.</li>
+  <li>Server-provided punch state in the sync download, for correct In/Out across multiple clocks.</li>
+  <li>Hash PINs, hide them in the admin list, and rate-limit <code>verify-pin</code>.</li>
+  <li>Battery-backed RTC on the clock, and recovery of <code>/queue.tmp</code> at boot.</li>
+  <li>Automated tests for sync idempotency and the clock failure log, run before each deploy.</li>
+</ol>
+
+<!-- ============================== APPENDIX ============================== -->
+<h2 class="page-break">Appendix: API endpoint reference</h2>
+<p>All routes require <code>X-Admin-Api-Key</code> except the health check. Prefix any route with <code>/api/test</code> instead of <code>/api</code> to use the test database.</p>
+<table>
+  <tr><th style="width:9%">Method</th><th style="width:42%">Route</th><th>Purpose</th></tr>
+  <tr><td>GET</td><td><code>/api/health</code></td><td>Liveness check, no key needed</td></tr>
+  <tr><td>GET</td><td><code>/api/employees</code></td><td>List employees (filter by active, location)</td></tr>
+  <tr><td>GET</td><td><code>/api/employees/{id}</code></td><td>One employee</td></tr>
+  <tr><td>POST</td><td><code>/api/employees</code></td><td>Create (optionally with a generated number)</td></tr>
+  <tr><td>PUT</td><td><code>/api/employees/{id}</code></td><td>Update profile</td></tr>
+  <tr><td>DELETE</td><td><code>/api/employees/{id}</code></td><td>Soft delete</td></tr>
+  <tr><td>GET</td><td><code>/api/employees/next-number</code></td><td>Next free 4-digit number</td></tr>
+  <tr><td>GET</td><td><code>/api/employees/employee-number/check</code></td><td>Is a number available</td></tr>
+  <tr><td>POST</td><td><code>/api/employees/{id}/employee-number</code></td><td>Assign a generated number (also sets PIN)</td></tr>
+  <tr><td>PUT / DELETE</td><td><code>/api/employees/{id}/pin</code></td><td>Set or clear the 4-digit PIN</td></tr>
+  <tr><td>PUT / DELETE</td><td><code>/api/employees/{id}/card</code></td><td>Assign or clear the NFC card</td></tr>
+  <tr><td>GET / PUT</td><td><code>/api/employees/{id}/wages</code></td><td>Current wage; set a new wage</td></tr>
+  <tr><td>GET</td><td><code>/api/employees/{id}/wages/history</code></td><td>Wage history</td></tr>
+  <tr><td>POST</td><td><code>/api/auth/verify-pin</code></td><td>Find an active employee by PIN or employee number</td></tr>
+  <tr><td>GET / POST</td><td><code>/api/locations</code></td><td>List or create locations</td></tr>
+  <tr><td>GET / PUT / DELETE</td><td><code>/api/locations/{id}</code></td><td>Read, update, delete a location</td></tr>
+  <tr><td>GET / POST</td><td><code>/api/timepunches</code></td><td>Punches by date range; create one punch</td></tr>
+  <tr><td>GET / PUT / DELETE</td><td><code>/api/timepunches/{id}</code></td><td>Read, edit, delete a punch</td></tr>
+  <tr><td>POST</td><td><code>/api/timepunches/sync</code></td><td>Batch upload from clocks; idempotent; logs rejections</td></tr>
+  <tr><td>GET</td><td><code>/api/sync/employees</code></td><td>Active employees with card and location, for clock caches</td></tr>
+  <tr><td>GET</td><td><code>/api/clock-failures</code></td><td>Clock issues (<code>includeResolved</code>, <code>limit</code>)</td></tr>
+  <tr><td>POST</td><td><code>/api/clock-failures/sync</code></td><td>Batch upload of clock-reported failures (max 100); idempotent</td></tr>
+  <tr><td>POST</td><td><code>/api/clock-failures/{id}/resolve</code>, <code>/reopen</code></td><td>Mark resolved or open</td></tr>
+  <tr><td>DELETE</td><td><code>/api/clock-failures/{id}</code></td><td>Delete an issue</td></tr>
+  <tr><td>GET / PUT</td><td><code>/api/day-rates</code></td><td>Resolved day rates for a range; set a day override</td></tr>
+  <tr><td>GET / PUT</td><td><code>/api/pay-periods/settings</code></td><td>Pay-period anchor date</td></tr>
+  <tr><td>POST</td><td><code>/api/pay-periods/verify</code>, <code>/unverify</code></td><td>Lock or unlock an employee's day rates for a period</td></tr>
+</table>
+
+</body>
+</html>
