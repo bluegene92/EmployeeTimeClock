@@ -7,6 +7,7 @@ import type {
   WageRate,
 } from "@/types/employee";
 import type { PunchType, TimePunch } from "@/types/timePunch";
+import type { ClockFailure } from "@/types/clockFailure";
 import { toWallClockIso } from "@/lib/biWeeklyUtils";
 import { getAppEnvironment } from "@/lib/environment";
 
@@ -217,6 +218,22 @@ export function updateTimePunch(
 
 export function deleteTimePunch(id: string) {
   return request<void>(`/api/timepunches/${id}`, { method: "DELETE" });
+}
+
+export function listClockFailures(includeResolved = false) {
+  return request<ClockFailure[]>(`/api/clock-failures?includeResolved=${includeResolved}`);
+}
+
+export function resolveClockFailure(id: string) {
+  return request<void>(`/api/clock-failures/${id}/resolve`, { method: "POST" });
+}
+
+export function reopenClockFailure(id: string) {
+  return request<void>(`/api/clock-failures/${id}/reopen`, { method: "POST" });
+}
+
+export function deleteClockFailure(id: string) {
+  return request<void>(`/api/clock-failures/${id}`, { method: "DELETE" });
 }
 
 export function listResolvedDayRates(from: string, to: string) {

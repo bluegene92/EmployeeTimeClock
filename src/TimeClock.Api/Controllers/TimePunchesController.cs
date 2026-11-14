@@ -12,15 +12,18 @@ public class TimePunchesController : ControllerBase
     private readonly ITimePunchRepository _punches;
     private readonly IEmployeeRepository _employees;
     private readonly ILocationRepository _locations;
+    private readonly IClockFailureRepository _failures;
 
     public TimePunchesController(
         ITimePunchRepository punches,
         IEmployeeRepository employees,
-        ILocationRepository locations)
+        ILocationRepository locations,
+        IClockFailureRepository failures)
     {
         _punches = punches;
         _employees = employees;
         _locations = locations;
+        _failures = failures;
     }
 
     [HttpGet]
@@ -105,7 +108,22 @@ public class TimePunchesController : ControllerBase
         {
             var error = await ValidateAsync(punch.EmployeeId, punch.LocationId, ct);
             if (error is not null)
+            {
+                // Keyed by the punch ID, so a clock retrying the same punch logs it once.
+                await _failures.CreateAsync(new ClockFailure
+                {
+                    Id = punch.Id,
+                    Reason = ClockFailureReasons.PunchRejected,
+                    Message = $"{error} No punch was recorded.",
+                    EmployeeId = punch.EmployeeId,
+                    PunchType = punch.PunchType,
+                    OccurredAt = punch.PunchedAt,
+                    LocationId = punch.LocationId,
+                    Source = punch.Source,
+                    DeviceId = punch.DeviceId
+                }, ct);
                 return BadRequest(new { message = error });
+            }
             punch.PunchedAt = WallTime.AsUnspecified(punch.PunchedAt);
         }
 

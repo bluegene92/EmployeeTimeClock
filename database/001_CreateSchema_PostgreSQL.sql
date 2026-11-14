@@ -111,3 +111,22 @@ CREATE TABLE IF NOT EXISTS "PayPeriodSettings" (
 INSERT INTO "PayPeriodSettings" ("Id", "AnchorDate")
 VALUES (1, DATE '2020-01-01')
 ON CONFLICT ("Id") DO NOTHING;
+
+-- Scans that did not become a punch, for admins to review.
+-- No foreign keys: a failure can name an employee or location that does not exist.
+CREATE TABLE IF NOT EXISTS "ClockFailures" (
+    "Id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "Reason" VARCHAR(50) NOT NULL,
+    "Message" VARCHAR(500) NOT NULL,
+    "CardUid" VARCHAR(32) NULL,
+    "EmployeeId" UUID NULL,
+    "PunchType" INT NULL,
+    "OccurredAt" TIMESTAMP NULL,
+    "LocationId" UUID NULL,
+    "Source" VARCHAR(50) NULL,
+    "DeviceId" VARCHAR(100) NULL,
+    "ReceivedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "ResolvedAt" TIMESTAMPTZ NULL
+);
+CREATE INDEX IF NOT EXISTS "IX_ClockFailures_ReceivedAt" ON "ClockFailures" ("ReceivedAt" DESC);
+CREATE INDEX IF NOT EXISTS "IX_ClockFailures_Open" ON "ClockFailures" ("ReceivedAt" DESC) WHERE "ResolvedAt" IS NULL;

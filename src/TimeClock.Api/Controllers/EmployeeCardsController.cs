@@ -11,8 +11,13 @@ namespace TimeClock.Api.Controllers;
 public class EmployeeCardsController : ControllerBase
 {
     private readonly IEmployeeRepository _employees;
+    private readonly IClockFailureRepository _failures;
 
-    public EmployeeCardsController(IEmployeeRepository employees) => _employees = employees;
+    public EmployeeCardsController(IEmployeeRepository employees, IClockFailureRepository failures)
+    {
+        _employees = employees;
+        _failures = failures;
+    }
 
     [HttpPut]
     public async Task<ActionResult> SetCard(Guid employeeId, [FromBody] SetCardRequest request, CancellationToken ct)
@@ -24,6 +29,11 @@ public class EmployeeCardsController : ControllerBase
                 return NotFound(new { message = result.Error });
             return BadRequest(new { message = result.Error });
         }
+
+        // Unknown-card reports for this card are answered once it belongs to someone.
+        if (EmployeeRepository.NormalizeCardUid(request.CardUid) is { } cardUid)
+            await _failures.ResolveCardAsync(cardUid, ct);
+
         return NoContent();
     }
 

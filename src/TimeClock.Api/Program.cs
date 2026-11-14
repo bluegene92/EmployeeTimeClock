@@ -100,6 +100,7 @@ builder.Services.AddScoped<ITimePunchRepository, TimePunchRepository>();
 builder.Services.AddScoped<IWageRateRepository, WageRateRepository>();
 builder.Services.AddScoped<IDayRateRepository, DayRateRepository>();
 builder.Services.AddScoped<IPayPeriodRepository, PayPeriodRepository>();
+builder.Services.AddScoped<IClockFailureRepository, ClockFailureRepository>();
 
 var app = builder.Build();
 

@@ -13,9 +13,9 @@ Wi-Fi RFID employee time clock: ESP32, PN532 reader, ST7789 TFT, and break/end-o
 
 The clock only knows employees that have a card in the admin app.
 
-1. Scan the new card at the clock. It shows **UNKNOWN CARD** and the card ID.
-2. In the admin app, open the employee and enter that ID under **NFC Card**.
-3. The clock picks up the change on its next employee refresh (every 15 minutes, or on restart).
+1. Scan the new card at the clock. It shows **UNKNOWN CARD** and the card ID, and reports the scan to the admin app.
+2. In the admin app, open **Clock Issues** and use the card button on that row to assign it to an employee. You can also enter the ID on the employee's page under **NFC Card**.
+3. The clock refreshes its employee list about a minute after an unknown card (otherwise every 15 minutes, or on restart), so the next scan works.
 
 ## How a scan becomes a punch
 
@@ -34,7 +34,8 @@ Punch times are local wall-clock time (Central), sent without an offset, which i
 - While nobody is at the clock, the ESP32 posts queued punches to `POST /api/timepunches/sync` in batches of 20, every 30 seconds.
 - A punch is removed from the file only after the API accepts it. Wi-Fi loss, API errors, and Render cold starts leave it queued for the next try.
 - Each punch has its own ID, so a retry after a lost response does not create a duplicate.
-- If the API rejects a punch as invalid (for example, the employee was deleted), that punch is dropped and logged to Serial so it does not block the rest.
+- If the API rejects a punch as invalid (for example, the employee was deleted), the API records it under **Clock Issues** in the admin app and the clock drops it so it does not block the rest.
+- Unknown-card scans are queued in `/failures.jsonl` and uploaded to `POST /api/clock-failures/sync`, which also shows them under **Clock Issues**.
 - The employee list (`GET /api/sync/employees`) is cached in `/employees.json`, so cards still work while offline.
 
 The clock needs the time from NTP before it can record a punch. If it boots without Wi-Fi, it shows **CLOCK NOT SET** until Wi-Fi returns.

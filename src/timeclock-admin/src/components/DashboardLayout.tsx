@@ -12,6 +12,7 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  TriangleAlert,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { Button } from "./ui/button";
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/employees", label: "Employees", icon: Users },
   { href: "/dashboard/locations", label: "Locations", icon: MapPin },
   { href: "/dashboard/timeclock", label: "Time Clock", icon: Clock },
+  { href: "/dashboard/clock-issues", label: "Clock Issues", icon: TriangleAlert },
   { href: "/dashboard/reports", label: "Reports", icon: BarChart3 },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];

@@ -55,8 +55,11 @@ Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET, &Wire);
 const char* EMPLOYEE_FILE = "/employees.json"; // cached copy of GET /api/sync/employees
 const char* STATE_FILE = "/state.json";        // last punch per employee, decides In vs. Break/Day
 const char* QUEUE_FILE = "/punches.jsonl";     // one punch per line, waiting to be uploaded
+const char* FAILURE_FILE = "/failures.jsonl";  // unknown-card scans, waiting to be uploaded
 
 const unsigned long EMPLOYEE_SYNC_INTERVAL = 900000; // 15 minutes
+// After an unknown card, refresh sooner in case the card was just assigned.
+const unsigned long UNKNOWN_CARD_REFRESH_AFTER = 60000;
 const unsigned long UPLOAD_INTERVAL = 30000;         // retry pending punches every 30 seconds
 const unsigned long CHOICE_TIMEOUT = 15000;
 const int UPLOAD_BATCH = 20;
@@ -419,8 +422,39 @@ bool queuePunch(const CachedEmployee& employee, const char* punchType, const Str
   return true;
 }
 
-int readQueue(String* lines, int maxLines) {
-  File file = LittleFS.open(QUEUE_FILE, "r");
+// Logged in the admin app under Clock Issues. The scan time is left out
+// when the clock has not been set yet.
+void queueUnknownCard(const String& cardUid) {
+  JsonDocument failure;
+  failure["id"] = newPunchId();
+  failure["reason"] = "UnknownCard";
+  failure["cardUid"] = cardUid;
+
+  String occurredAt;
+  String today;
+  if (localNow(occurredAt, today)) failure["occurredAt"] = occurredAt;
+  else failure["occurredAt"] = nullptr;
+
+  if (strlen(DEVICE_LOCATION_ID) > 0) failure["locationId"] = DEVICE_LOCATION_ID;
+  else failure["locationId"] = nullptr;
+
+  failure["source"] = "ESP32";
+  failure["deviceId"] = deviceId;
+
+  File file = LittleFS.open(FAILURE_FILE, "a");
+  if (!file) {
+    Serial.println("Cannot open failure queue");
+    return;
+  }
+  serializeJson(failure, file);
+  file.print('\n');
+  file.close();
+
+  nextUploadAt = millis() + 3000;
+}
+
+int readQueue(const char* path, String* lines, int maxLines) {
+  File file = LittleFS.open(path, "r");
   if (!file) return 0;
 
   int count = 0;
@@ -433,13 +467,13 @@ int readQueue(String* lines, int maxLines) {
   return count;
 }
 
-// Removes the first `count` non-empty lines from the queue.
-void dropFromQueue(int count) {
+// Removes the first `count` non-empty lines from a queue file.
+void dropFromQueue(const char* path, int count) {
   if (count <= 0) return;
 
-  File in = LittleFS.open(QUEUE_FILE, "r");
+  File in = LittleFS.open(path, "r");
   if (!in) return;
-  File out = LittleFS.open("/punches.tmp", "w");
+  File out = LittleFS.open("/queue.tmp", "w");
   if (!out) {
     in.close();
     return;
@@ -460,23 +494,33 @@ void dropFromQueue(int count) {
   in.close();
   out.close();
 
-  LittleFS.remove(QUEUE_FILE);
-  LittleFS.rename("/punches.tmp", QUEUE_FILE);
+  LittleFS.remove(path);
+  LittleFS.rename("/queue.tmp", path);
 }
 
-int postPunches(const String& body) {
+String joinLines(const char* key, String* lines, int count) {
+  String body = String("{\"") + key + "\":[";
+  for (int i = 0; i < count; i++) {
+    if (i > 0) body += ",";
+    body += lines[i];
+  }
+  body += "]}";
+  return body;
+}
+
+int postJson(const char* path, const String& body) {
   WiFiClientSecure client;
   client.setInsecure();
 
   HTTPClient http;
   http.setTimeout(10000);
-  if (!http.begin(client, String(API_BASE_URL) + "/api/timepunches/sync")) return -1;
+  if (!http.begin(client, String(API_BASE_URL) + path)) return -1;
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Admin-Api-Key", ADMIN_API_KEY);
 
   int code = http.POST(body);
-  Serial.printf("Punch upload HTTP code: %d\n", code);
+  Serial.printf("POST %s HTTP code: %d\n", path, code);
   if (code > 0) Serial.println(http.getString().substring(0, 200));
   http.end();
   return code;
@@ -484,23 +528,15 @@ int postPunches(const String& body) {
 
 // Sends queued punches. A punch is removed only after the API accepts it,
 // or rejects it as invalid (400), for example an employee who was deleted.
-void uploadQueue() {
-  if (!apiReady()) return;
-
+// The API logs each rejected punch under Clock Issues in the admin app.
+void uploadPunches() {
   String lines[UPLOAD_BATCH];
-  int count = readQueue(lines, UPLOAD_BATCH);
+  int count = readQueue(QUEUE_FILE, lines, UPLOAD_BATCH);
   if (count == 0) return;
 
-  String body = "{\"punches\":[";
-  for (int i = 0; i < count; i++) {
-    if (i > 0) body += ",";
-    body += lines[i];
-  }
-  body += "]}";
-
-  int code = postPunches(body);
+  int code = postJson("/api/timepunches/sync", joinLines("punches", lines, count));
   if (code == HTTP_CODE_OK) {
-    dropFromQueue(count);
+    dropFromQueue(QUEUE_FILE, count);
     return;
   }
   if (code != HTTP_CODE_BAD_REQUEST) return; // offline, server error, or bad key: keep and retry
@@ -508,15 +544,31 @@ void uploadQueue() {
   // One punch in the batch is invalid. Send them one at a time so the good ones still go through.
   int handled = 0;
   for (int i = 0; i < count; i++) {
-    int single = postPunches("{\"punches\":[" + lines[i] + "]}");
+    int single = postJson("/api/timepunches/sync", joinLines("punches", &lines[i], 1));
     if (single == HTTP_CODE_BAD_REQUEST) {
-      Serial.println("Dropping rejected punch: " + lines[i]);
+      Serial.println("Punch rejected by the API: " + lines[i]);
     } else if (single != HTTP_CODE_OK) {
       break;
     }
     handled++;
   }
-  dropFromQueue(handled);
+  dropFromQueue(QUEUE_FILE, handled);
+}
+
+void uploadFailures() {
+  String lines[UPLOAD_BATCH];
+  int count = readQueue(FAILURE_FILE, lines, UPLOAD_BATCH);
+  if (count == 0) return;
+
+  int code = postJson("/api/clock-failures/sync", joinLines("failures", lines, count));
+  // 400 means the file holds something the API cannot read; drop it rather than retry forever.
+  if (code == HTTP_CODE_OK || code == HTTP_CODE_BAD_REQUEST) dropFromQueue(FAILURE_FILE, count);
+}
+
+void uploadQueue() {
+  if (!apiReady()) return;
+  uploadPunches();
+  uploadFailures();
 }
 
 // ---------------------------------------------------------------------------
@@ -595,6 +647,10 @@ void checkRFID() {
   if (!findLocalEmployee(cardUID, employee)) {
     // Shown long enough to copy into the admin app's NFC Card field.
     showMessage("UNKNOWN CARD", cardUID, RED, 8000);
+    queueUnknownCard(cardUID);
+    if (millis() - lastEmployeeSync >= UNKNOWN_CARD_REFRESH_AFTER) {
+      lastEmployeeSync = millis() - EMPLOYEE_SYNC_INTERVAL; // refresh at the next idle moment
+    }
     return;
   }
 
