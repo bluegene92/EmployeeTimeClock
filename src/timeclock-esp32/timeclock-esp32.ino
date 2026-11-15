@@ -32,7 +32,7 @@
 #define DEVICE_LOCATION_ID ""
 #endif
 
-#define FIRMWARE_VERSION "2026.11.14b"
+#define FIRMWARE_VERSION "2026.11.14c"
 
 // Display
 #define TFT_CS 5
@@ -123,39 +123,40 @@ struct LockGuard {
 // ---------------------------------------------------------------------------
 // Buzzer: one short beep = punch recorded,
 // three quick beeps = card not registered or punch not recorded.
-// Played from loop() so a beep never holds up the reader.
+// Played by its own task so a beep never holds up the reader.
 // ---------------------------------------------------------------------------
 
-const uint16_t SUCCESS_PATTERN[] = {150};
-const uint16_t FAIL_PATTERN[] = {90, 80, 90, 80, 90}; // on, off, on, off, on
+enum BeepKind : uint32_t { BEEP_SUCCESS = 1, BEEP_FAIL = 2 };
+TaskHandle_t buzzerTask = nullptr;
 
-const uint16_t* beepPattern = nullptr;
-int beepSteps = 0;
-int beepStep = 0;
-unsigned long beepStepEndsAt = 0;
-
-void startBeep(const uint16_t* pattern, int steps) {
-  beepPattern = pattern;
-  beepSteps = steps;
-  beepStep = 0;
-  beepStepEndsAt = millis() + pattern[0];
+void buzz(unsigned int onMs) {
   digitalWrite(BUZZER, HIGH);
+  vTaskDelay(pdMS_TO_TICKS(onMs));
+  digitalWrite(BUZZER, LOW);
 }
 
-void beepSuccess() { startBeep(SUCCESS_PATTERN, 1); }
-void beepFail() { startBeep(FAIL_PATTERN, 5); }
-
-void updateBuzzer() {
-  if (!beepPattern || (long)(millis() - beepStepEndsAt) < 0) return;
-  beepStep++;
-  if (beepStep >= beepSteps) {
-    digitalWrite(BUZZER, LOW);
-    beepPattern = nullptr;
-    return;
+void buzzerLoop(void*) {
+  for (;;) {
+    uint32_t kind = 0;
+    xTaskNotifyWait(0, UINT32_MAX, &kind, portMAX_DELAY);
+    if (kind == BEEP_FAIL) {
+      for (int i = 0; i < 3; i++) {
+        buzz(100);
+        if (i < 2) vTaskDelay(pdMS_TO_TICKS(80));
+      }
+    } else {
+      buzz(150);
+    }
   }
-  digitalWrite(BUZZER, beepStep % 2 == 0 ? HIGH : LOW); // even steps are tones
-  beepStepEndsAt = millis() + beepPattern[beepStep];
 }
+
+void beep(BeepKind kind) {
+  Serial.println(kind == BEEP_FAIL ? "Beep: fail" : "Beep: success");
+  if (buzzerTask) xTaskNotify(buzzerTask, kind, eSetValueWithOverwrite);
+}
+
+void beepSuccess() { beep(BEEP_SUCCESS); }
+void beepFail() { beep(BEEP_FAIL); }
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -886,6 +887,9 @@ void setup() {
 
   pinMode(BUZZER, OUTPUT);
   digitalWrite(BUZZER, LOW);
+  // Higher priority than loop() so a beep starts as soon as it is requested.
+  xTaskCreatePinnedToCore(buzzerLoop, "buzzer", 2048, nullptr, 2, &buzzerTask, 1);
+  beepSuccess(); // startup beep: confirms the buzzer works
 
   SPI.begin();
   Wire.begin(21, 22);
@@ -929,8 +933,6 @@ void setup() {
 }
 
 void loop() {
-  updateBuzzer();
-
   if (showingMessage && (long)(millis() - messageUntil) >= 0) {
     showStandby();
   }
@@ -941,6 +943,5 @@ void loop() {
   }
 
   checkRFID();
-  updateBuzzer();
   delay(5);
 }

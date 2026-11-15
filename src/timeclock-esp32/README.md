@@ -50,7 +50,7 @@ Punch times are local wall-clock time (Central), sent without an offset, which i
 
 | Sound | Meaning |
 |-------|---------|
-| One short beep | Punch recorded (CLOCKED IN or CLOCKED OUT) |
+| One short beep | Punch recorded (CLOCKED IN or CLOCKED OUT), and once at startup to confirm the buzzer works |
 | Three quick beeps | Card not registered, scanned again within a minute, clock time not set, or punch could not be saved |
 
 ## Monitoring
